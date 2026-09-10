@@ -10,7 +10,7 @@ open System.Text.RegularExpressions
 module UpdateChecker =
 
     [<Literal>]
-    let CurrentVersion = "1.1.9"
+    let CurrentVersion = "1.2.0"
 
     [<Literal>]
     let ReleasesApiUrl = "https://api.github.com/repos/NODIX-TECH/DLSS-5-MANAGER/releases"
@@ -19,7 +19,7 @@ module UpdateChecker =
     let ReleasesPageUrl = "https://github.com/NODIX-TECH/DLSS-5-MANAGER/releases"
 
     [<Literal>]
-    let DownloadPageUrl = "https://numidiastudios.com/#dlss-5-manager"
+    let DownloadPageUrl = "https://dlss5manager.numidiastudios.com"
 
     type UpdateResult =
         { HasUpdate: bool

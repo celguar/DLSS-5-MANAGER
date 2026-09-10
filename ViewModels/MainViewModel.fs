@@ -228,6 +228,10 @@ type MainViewModel() as this =
     let mutable isSettingsOpen = false
     let mutable totalGamesCount = 0
 
+    /// The community section. Built with the window so the tab can switch to it
+    /// instantly; it does not touch the network until the tab is opened.
+    let community = CommunityViewModel()
+
     // ---- Manage sheet state ---------------------------------------------
     let mutable isManageOpen = false
     let mutable manageCard: GameCardViewModel option = None
@@ -844,28 +848,65 @@ type MainViewModel() as this =
                 this.RaisePropertyChanged("IsEmulatorsViewVisible")
                 this.RaisePropertyChanged("IsGamesTabActive")
                 this.RaisePropertyChanged("IsEmulatorsTabActive")
+                this.RaisePropertyChanged("IsCommunityViewVisible")
+                this.RaisePropertyChanged("IsCommunityTabActive")
                 this.RaisePropertyChanged("SearchPlaceholder")
+
+                // The community grid is server-side, so it is fetched the first
+                // time the section is opened and never before - a user who
+                // never goes there makes no network call at all.
+                if value = "community" then
+                    community.ApplyQuery(searchText)
+                    community.EnsureLoaded()
 
     member this.IsSettingsOpen
         with get () = isSettingsOpen
         and set value = this.ActiveSection <- (if value then "settings" else "games")
 
-    /// One box, three jobs - it says which one it is doing right now.
+    /// One box, four jobs - it says which one it is doing right now.
     member this.SearchPlaceholder =
         match activeSection with
         | "settings" -> "Search settings..."
         | "emulators" -> "Search emulators..."
+        | "community" -> "Search community..."
         | _ -> "Search games..."
 
     member this.IsGamesViewVisible = activeSection = "games"
     member this.IsEmulatorsViewVisible = activeSection = "emulators"
+    member this.IsCommunityViewVisible = activeSection = "community"
     member this.IsGamesTabActive = activeSection = "games"
     member this.IsEmulatorsTabActive = activeSection = "emulators"
+    member this.IsCommunityTabActive = activeSection = "community"
+
+    /// The community section's own state. Exposed so the window can bind to it
+    /// as `Community.X` rather than mirroring three dozen properties here.
+    member _.Community = community
 
     member this.OpenSettings() = this.ActiveSection <- "settings"
     member this.CloseSettings() = this.ActiveSection <- "games"
     member this.ShowGames() = this.ActiveSection <- "games"
     member this.ShowEmulators() = this.ActiveSection <- "emulators"
+    member this.ShowCommunity() = this.ActiveSection <- "community"
+
+    /// "Share result" in the Manage sheet. The post is built from the install
+    /// this app made, so the route, API, bit-width and add-ons are already
+    /// filled in and the user only picks the verdict.
+    member this.ShareToCommunity() =
+        match manageCard with
+        | Some card ->
+            this.IsManageOpen <- false
+
+            community.OpenComposer(
+                card.Game,
+                isOverlayEnabled,
+                ModInstaller.modeKey installMode,
+                ModInstaller.optiApiKey optiApi,
+                ModInstaller.archKey installArch,
+                useNeuralAddon
+            )
+
+            this.ActiveSection <- "community"
+        | None -> ()
 
     member this.ToggleSettings() =
         this.ActiveSection <- (if activeSection = "settings" then "games" else "settings")
@@ -885,8 +926,11 @@ type MainViewModel() as this =
                 filterEmulatorsList ()
                 this.RaisePropertyChanged("HasGames")
                 this.RaisePropertyChanged("HasEmulators")
-                // The same box filters whichever page is open.
+                // The same box filters whichever page is open. The community
+                // list is filtered by the server, so it only re-queries while
+                // that section is the one on screen.
                 this.RaiseSettingsFilter()
+                if activeSection = "community" then community.ApplyQuery(value)
 
     // ---------------------------------------------------------------------
     // COLLAPSIBLE SETTINGS SECTIONS
@@ -938,7 +982,7 @@ type MainViewModel() as this =
 
     member this.ShowPayloadCard =
         matchesCard searchText [ loc.ModPayloadFiles; loc.ModPayloadDesc; loc.Replace; loc.Restore
-                                 "mod"; "payload"; "files"; "dlss5-feed.addon64"; "renodx-dlss5.addon64"
+                                 "mod"; "payload"; "files"; "dlss5-feed.addon64"; "renodx-dlss.addon64"; "renodx-dlss5.addon64"
                                  "nvngx_dlssnr.dll"; "replace"; "restore" ]
 
     member this.ShowPerformanceCard =
@@ -948,8 +992,13 @@ type MainViewModel() as this =
         matchesCard searchText [ "amd"; "rdna"; "radeon"; "amd mode"; "beta"; "gpu" ]
 
     member this.ShowOverlayCard =
-        matchesCard searchText [ loc.OverlaySection; loc.OverlayTitle; loc.OverlayDesc; loc.OverlayStyle
-                                 "overlay"; "hud"; "fps"; "vram"; "telemetry"; "theme"; "in-game" ]
+        matchesCard searchText [ loc.OverlaySection; loc.OverlayTitle; loc.OverlayTagline; loc.OverlayStyle
+                                 "overlay"; "dynamic overlay"; "hud"; "fps"; "vram"; "telemetry"; "theme"; "in-game" ]
+
+    /// The three feature switches share one card, so the card is on screen when
+    /// any of its rows is - each row still hides itself on its own property.
+    member this.ShowFeaturesCard =
+        this.ShowOverlayCard || this.ShowAmdCard || this.ShowPerformanceCard
 
     member this.ShowSupportCard =
         matchesCard searchText [ "support"; "donate"; "ko-fi"; "kofi"; "tutorial"; "tutorials"; "guide"
@@ -995,6 +1044,7 @@ type MainViewModel() as this =
         this.RaisePropertyChanged("ShowPerformanceCard")
         this.RaisePropertyChanged("ShowAmdCard")
         this.RaisePropertyChanged("ShowOverlayCard")
+        this.RaisePropertyChanged("ShowFeaturesCard")
         this.RaisePropertyChanged("ShowSupportCard")
         this.RaisePropertyChanged("ShowAboutCard")
         this.RaisePropertyChanged("HasNoSettingsMatch")
