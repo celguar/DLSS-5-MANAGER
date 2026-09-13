@@ -14,10 +14,10 @@
     <Authors>NODIX TECH</Authors>
     <Description>DLSS 5 MANAGER — built by NODIX TECH, published by Numidia Studios.</Description>
     <Copyright>© 2026 Numidia Studios. All rights reserved. Built by NODIX TECH.</Copyright>
-    <Version>1.2.0</Version>
-    <AssemblyVersion>1.2.0.0</AssemblyVersion>
-    <FileVersion>1.2.0.0</FileVersion>
-    <InformationalVersion>1.2.0</InformationalVersion>
+    <Version>1.2.6</Version>
+    <AssemblyVersion>1.2.6.0</AssemblyVersion>
+    <FileVersion>1.2.6.0</FileVersion>
+    <InformationalVersion>1.2.6</InformationalVersion>
 
     <!-- ================================================================= -->
     <!-- RUNTIME FOOTPRINT                                                  -->
@@ -57,9 +57,12 @@
     <Compile Include="Services\UpdateChecker.fs" />
     <Compile Include="Services\SystemSpecs.fs" />
     <Compile Include="Services\CommunityApi.fs" />
+    <Compile Include="Services\ChatImages.fs" />
+    <Compile Include="Services\UiSounds.fs" />
     <Compile Include="ViewModels\ViewModelBase.fs" />
     <Compile Include="ViewModels\GameCardViewModel.fs" />
     <Compile Include="ViewModels\CommunityViewModel.fs" />
+    <Compile Include="ViewModels\ChatViewModel.fs" />
     <Compile Include="ViewModels\MainViewModel.fs" />
     <Compile Include="Views\MainWindow.axaml.fs" />
     <Compile Include="ViewLocator.fs" />
@@ -110,5 +113,21 @@
       <_ObfPublishDir>$([System.IO.Path]::GetFullPath('$(PublishDir)').TrimEnd('\'))</_ObfPublishDir>
     </PropertyGroup>
     <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\obfuscate.ps1&quot; -Dir &quot;$(_ObfPublishDir)&quot; -Tool &quot;$(MSBuildProjectDirectory)\.obfuscar-tool\obfuscar.console.exe&quot;" />
+  </Target>
+
+  <!-- ================================================================= -->
+  <!-- ONE-FILE SETUP                                                     -->
+  <!-- Every Release publish produces two things: the folder of files it  -->
+  <!-- always has (E:\DLSS 5 MANAGER), and a single setup executable,     -->
+  <!-- "DLSS.5.MANAGER.<version>.exe" in E:\DLSS 5 MANAGER EXE, built from  -->
+  <!-- that same folder once it has been obfuscated. The folder is not    -->
+  <!-- changed. Pass -p:SkipInstaller=true to publish the folder alone.    -->
+  <!-- ================================================================= -->
+  <Target Name="BuildInstaller" AfterTargets="ObfuscatePublish"
+          Condition="'$(Configuration)' == 'Release' And '$(RuntimeIdentifier)' == 'win-x64' And '$(SkipInstaller)' != 'true' And Exists('$(MSBuildProjectDirectory)\..\Installer\build-installer.ps1')">
+    <PropertyGroup>
+      <_InstallerPublishDir>$([System.IO.Path]::GetFullPath('$(PublishDir)').TrimEnd('\'))</_InstallerPublishDir>
+    </PropertyGroup>
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\Installer\build-installer.ps1&quot; -PublishDir &quot;$(_InstallerPublishDir)&quot; -Version &quot;$(Version)&quot; -OutDir &quot;E:\DLSS 5 MANAGER EXE&quot;" />
   </Target>
 </Project>

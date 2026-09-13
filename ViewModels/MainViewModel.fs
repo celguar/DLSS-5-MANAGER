@@ -232,6 +232,14 @@ type MainViewModel() as this =
     /// instantly; it does not touch the network until the tab is opened.
     let community = CommunityViewModel()
 
+    /// PULSE, the chat inside the community section. Owned here rather than by
+    /// the community view-model because it has to know about window focus -
+    /// a minimised app must not poll - and about which section is on screen.
+    let pulse = PulseViewModel()
+
+    /// Which half of the community section is showing: the games, or PULSE.
+    let mutable isPulseOpen = false
+
     // ---- Manage sheet state ---------------------------------------------
     let mutable isManageOpen = false
     let mutable manageCard: GameCardViewModel option = None
@@ -269,12 +277,20 @@ type MainViewModel() as this =
     /// add-on next to the game. Off unless the user asks for it.
     let mutable useNeuralAddon = false
 
+    /// The two RenoDX options on the 64-bit DX12 / DX11 / DX9 routes: the MFG
+    /// unlock add-on beside RenoDX, and the Multipass build of RenoDX in place
+    /// of the ordinary one. Both off unless the user asks.
+    let mutable useMfgUnlock = false
+    let mutable useMultipass = false
+
     /// The route and build recorded in the manifest for the open game, "" when
     /// this app did not install it. Drives the Install / Switch / Remove button.
     let mutable installedRoute = ""
     let mutable installedArch = ""
     let mutable installedApi = ""
     let mutable installedNeural = false
+    let mutable installedMfgUnlock = false
+    let mutable installedMultipass = false
 
     /// True once the user has picked a route in the open sheet. Detection then
     /// stops overriding it - see SetInstallMode.
@@ -627,6 +643,8 @@ type MainViewModel() as this =
             if isWindowActive <> value then
                 isWindowActive <- value
                 this.RaisePropertyChanged("IsBackgroundMotionOn")
+                // PULSE only polls while someone can actually see it.
+                pulse.SetWindowActive(value)
 
     /// Turns off the moving background and the card hover animation. The look
     /// is unchanged at rest; only the motion goes.
@@ -747,6 +765,10 @@ type MainViewModel() as this =
                 // Labels change, the list does not - so the picker keeps its
                 // selection and simply redraws it in the new language.
                 relabelAtmospheres loc
+                // These pickers were refilled with the new words; tell them
+                // again which entry is selected.
+                this.RaisePropertyChanged("SelectedOverlayThemeIndex")
+                community.RelabelFilters()
                 this.RaisePropertyChanged("TotalGamesText")
                 this.RaisePropertyChanged("InstallModeHintText")
                 this.RaiseDlss5State()
@@ -859,6 +881,12 @@ type MainViewModel() as this =
                     community.ApplyQuery(searchText)
                     community.EnsureLoaded()
 
+                    if isPulseOpen then
+                        pulse.Activate(CommunityShared.isVerified community.DisplayName, community.DisplayName)
+                else
+                    // Leaving the section stops PULSE polling straight away.
+                    pulse.Deactivate()
+
     member this.IsSettingsOpen
         with get () = isSettingsOpen
         and set value = this.ActiveSection <- (if value then "settings" else "games")
@@ -881,6 +909,38 @@ type MainViewModel() as this =
     /// The community section's own state. Exposed so the window can bind to it
     /// as `Community.X` rather than mirroring three dozen properties here.
     member _.Community = community
+
+    /// PULSE, the chat inside the community section.
+    member _.Pulse = pulse
+
+    /// The reply toast was clicked: straight to the chat.
+    member this.OpenChatFromReply() =
+        pulse.DismissReplyToast()
+        this.ActiveSection <- "community"
+        this.ShowPulse()
+
+    member _.IsPulseOpen = isPulseOpen
+    member _.IsCommunityGamesOpen = not isPulseOpen
+
+    /// Only decides whether a Delete link is drawn on other people's messages.
+    /// The server checks the developer flag itself before removing anything.
+    member private _.ViewerIsDev = CommunityShared.isVerified community.DisplayName
+
+    member this.ShowPulse() =
+        if not isPulseOpen then
+            isPulseOpen <- true
+            this.RaisePropertyChanged("IsPulseOpen")
+            this.RaisePropertyChanged("IsCommunityGamesOpen")
+
+        pulse.Activate(this.ViewerIsDev, community.DisplayName)
+
+    /// Back to the games. PULSE stops polling the moment it is off screen.
+    member this.ShowCommunityGames() =
+        if isPulseOpen then
+            isPulseOpen <- false
+            pulse.Deactivate()
+            this.RaisePropertyChanged("IsPulseOpen")
+            this.RaisePropertyChanged("IsCommunityGamesOpen")
 
     member this.OpenSettings() = this.ActiveSection <- "settings"
     member this.CloseSettings() = this.ActiveSection <- "games"
@@ -1389,6 +1449,20 @@ type MainViewModel() as this =
     /// colour atmospheres do.
     member this.OverlayThemes = ModInstaller.overlayThemes
 
+    /// The style picker binds to the index, like the atmosphere picker: it
+    /// shows translated names (`Loc.OverlayThemeNames`), while the English
+    /// name is what gets saved and what the add-on reads. The -1 a language
+    /// switch reports for a moment is ignored.
+    member this.SelectedOverlayThemeIndex
+        with get () =
+            ModInstaller.overlayThemes
+            |> Array.tryFindIndex ((=) overlayTheme)
+            |> Option.defaultValue 0
+        and set (index: int) =
+            if index >= 0 && index < ModInstaller.overlayThemes.Length then
+                this.SelectedOverlayTheme <- ModInstaller.overlayThemes.[index]
+                this.RaisePropertyChanged("SelectedOverlayThemeIndex")
+
     member this.SelectedOverlayTheme
         with get () = overlayTheme
         and set (value: string) =
@@ -1483,6 +1557,44 @@ type MainViewModel() as this =
         && installedRoute <> ""
         && installedRoute = ModInstaller.modeKey installMode
 
+    /// The two RenoDX options exist only where RenoDX is installed: the DX12,
+    /// DX11 and DX9 routes, 64-bit. A 32-bit install carries no RenoDX, and
+    /// neither do AMD mode or emulators.
+    member this.IsRenoDxOptionsVisible =
+        not isEmulatorTarget
+        && not isAmdMode
+        && (installMode = ModInstaller.Dx12Auto
+            || installMode = ModInstaller.Dx11
+            || installMode = ModInstaller.Dx9)
+        && not (ModInstaller.archMatters installMode && installArch = ModInstaller.Bit32)
+
+    member this.IsMfgUnlockOn = useMfgUnlock
+    member this.IsMfgUnlockOff = not useMfgUnlock
+
+    member this.SetMfgUnlock(on: bool) =
+        if useMfgUnlock <> on then
+            useMfgUnlock <- on
+            this.RaiseInstallModeState()
+
+    member this.IsMultipassOn = useMultipass
+    member this.IsMultipassOff = not useMultipass
+
+    member this.SetMultipass(on: bool) =
+        if useMultipass <> on then
+            useMultipass <- on
+            this.RaiseInstallModeState()
+
+    /// Same rule as the neural dot: live only on the route it was recorded with.
+    member this.IsMfgUnlockInstalled =
+        installedMfgUnlock
+        && installedRoute <> ""
+        && installedRoute = ModInstaller.modeKey installMode
+
+    member this.IsMultipassInstalled =
+        installedMultipass
+        && installedRoute <> ""
+        && installedRoute = ModInstaller.modeKey installMode
+
     member this.IsBit64 = (installArch = ModInstaller.Bit64)
     member this.IsBit32 = (installArch = ModInstaller.Bit32)
 
@@ -1505,6 +1617,11 @@ type MainViewModel() as this =
         this.RaisePropertyChanged("IsOverlayRouteSupported")
         this.RaisePropertyChanged("IsNeuralAddonOn")
         this.RaisePropertyChanged("IsNeuralAddonOff")
+        this.RaisePropertyChanged("IsRenoDxOptionsVisible")
+        this.RaisePropertyChanged("IsMfgUnlockOn")
+        this.RaisePropertyChanged("IsMfgUnlockOff")
+        this.RaisePropertyChanged("IsMultipassOn")
+        this.RaisePropertyChanged("IsMultipassOff")
         this.RaisePropertyChanged("IsBit64")
         this.RaisePropertyChanged("IsBit32")
         this.RaisePropertyChanged("InstallModeHintText")
@@ -1599,8 +1716,6 @@ type MainViewModel() as this =
 
     member this.InstallModeHintText =
         match installMode with
-        | ModInstaller.OptiScalerMode when optiApi = ModInstaller.OptiNeural ->
-            "The neural upstream build of OptiScaler, hooked the same way. ReShade is not used."
         | ModInstaller.OptiScalerMode -> "OptiScaler hooks the game directly. ReShade is not used."
         | ModInstaller.Dx12Auto -> "ReShade + RenoDX with the DLSS 5 effects."
         | ModInstaller.Dx11 -> "ReShade + RenoDX with the DLSS 5 effects."
@@ -1628,8 +1743,11 @@ type MainViewModel() as this =
             || (installMode = ModInstaller.OptiScalerMode
                 && installedApi <> ModInstaller.optiApiKey optiApi)
             // Turning the neural upstream add-on on or off changes what is on
-            // the game, so it is a switch like any other.
-            || (this.IsNeuralAddonVisible && installedNeural <> useNeuralAddon))
+            // the game, so it is a switch like any other - and so do the two
+            // RenoDX options.
+            || (this.IsNeuralAddonVisible && installedNeural <> useNeuralAddon)
+            || (this.IsRenoDxOptionsVisible
+                && (installedMfgUnlock <> useMfgUnlock || installedMultipass <> useMultipass)))
 
     member this.ShowInstallButton = not dlss5Present && not isInstalling
     member this.ShowSwitchButton = this.IsSwitchingRoute && not isInstalling
@@ -1660,7 +1778,7 @@ type MainViewModel() as this =
         let route =
             match installMode with
             | ModInstaller.OptiScalerMode ->
-                if optiApi = ModInstaller.OptiNeural then "OptiScaler neural" else "OptiScaler"
+                "OptiScaler"
             | ModInstaller.Dx12Auto -> "DX12"
             | ModInstaller.Dx11 -> "DX11"
             | ModInstaller.Dx9 -> "DX9"
@@ -1672,13 +1790,23 @@ type MainViewModel() as this =
 
         // The add-on is part of what gets installed, so the button has to say
         // which way the switch is going.
-        let neural =
-            if this.IsNeuralAddonVisible && useNeuralAddon then " + neural" else ""
+        // One option is named; several are counted, so the text always fits
+        // the button instead of running out past the edge of the sheet.
+        let options =
+            [ if this.IsNeuralAddonVisible && useNeuralAddon then "neural"
+              if this.IsRenoDxOptionsVisible && useMfgUnlock then "MFG unlock"
+              if this.IsRenoDxOptionsVisible && useMultipass then "multipass" ]
+
+        let suffix =
+            match options with
+            | [] -> ""
+            | [ one ] -> " + " + one
+            | many -> sprintf " + %d options" many.Length
 
         if ModInstaller.archMatters installMode then
-            sprintf "Switch to %s %s-bit%s" route (ModInstaller.archKey installArch) neural
+            sprintf "Switch to %s %s-bit%s" route (ModInstaller.archKey installArch) suffix
         else
-            "Switch to " + route + neural
+            "Switch to " + route + suffix
 
     member this.ManageDlss5Text =
         if not dlss5Present then loc.NotInstalled
@@ -1710,6 +1838,8 @@ type MainViewModel() as this =
         this.RaisePropertyChanged("IsOptiVulkanInstalled")
         this.RaisePropertyChanged("IsOptiNeuralInstalled")
         this.RaisePropertyChanged("IsNeuralAddonInstalled")
+        this.RaisePropertyChanged("IsMfgUnlockInstalled")
+        this.RaisePropertyChanged("IsMultipassInstalled")
         this.RaisePropertyChanged("ManageDlss5Text")
         this.RaisePropertyChanged("ManageDlss5Brush")
 
@@ -1769,6 +1899,14 @@ type MainViewModel() as this =
             match manageCard with
             | Some card -> ModInstaller.installedNeuralAddon card.Game
             | None -> false
+
+        let (mfgUnlock, multipass) =
+            match manageCard with
+            | Some card -> ModInstaller.installedRenoDxOptions card.Game
+            | None -> (false, false)
+
+        installedMfgUnlock <- mfgUnlock
+        installedMultipass <- multipass
 
         if not (String.IsNullOrWhiteSpace(analysis.ExecutablePath)) then
             manageExePath <- analysis.ExecutablePath
@@ -1840,9 +1978,15 @@ type MainViewModel() as this =
         installedApi <- ModInstaller.installedOptiApi card.Game
         installedNeural <- ModInstaller.installedNeuralAddon card.Game
 
+        let (mfgUnlock, multipass) = ModInstaller.installedRenoDxOptions card.Game
+        installedMfgUnlock <- mfgUnlock
+        installedMultipass <- multipass
+
         // Open on whatever the recorded install actually used, so the sheet
         // offers Remove rather than a switch to itself.
         useNeuralAddon <- installedNeural
+        useMfgUnlock <- installedMfgUnlock
+        useMultipass <- installedMultipass
 
         // A fresh sheet: nothing has been picked in it yet, and whether this
         // game arrived with an install is what decides if detection may route
@@ -1854,7 +1998,9 @@ type MainViewModel() as this =
             this.SetOptiApi(
                 match installedApi with
                 | "vulkan" -> ModInstaller.OptiVulkan
-                | "neural" -> ModInstaller.OptiNeural
+                // A manifest from before 1.2.1 can say "neural". That build is
+                // now the only one, so it reads back as the DirectX 12 choice -
+                // which is the slot it was hooked in anyway.
                 | _ -> ModInstaller.OptiDx12
             )
 
@@ -1935,6 +2081,8 @@ type MainViewModel() as this =
             let targetArch = installArch
             let targetApi = optiApi
             let targetNeural = useNeuralAddon
+            let targetMfgUnlock = useMfgUnlock
+            let targetMultipass = useMultipass
             let targetOverlay = this.OverlayOptions
 
             this.InstallResultText <- ""
@@ -1968,13 +2116,16 @@ type MainViewModel() as this =
                             (false, "Could not remove the previous install: " + removal.Message)
                         else
                             let outcome =
-                                ModInstaller.install game exePath plan target targetArch targetApi targetNeural targetOverlay (scaled 0.33 0.67)
+                                ModInstaller.install game exePath plan target targetArch targetApi targetNeural targetMfgUnlock targetMultipass targetOverlay (scaled 0.33 0.67)
                             (outcome.Success, "Switched. " + outcome.Message)
                     with ex ->
                         (false, ex.Message)
 
                 Dispatcher.UIThread.Post(fun () ->
                     this.IsInstalling <- false
+
+                    // A switch ends with the new route installed: the install chime.
+                    if succeeded then UiSounds.installDone ()
                     this.InstallResultIsError <- not succeeded
                     this.InstallResultText <- message
                     this.InstallProgress <- (if succeeded then 100.0 else 0.0)
@@ -2020,7 +2171,7 @@ type MainViewModel() as this =
                     try
                         let outcome =
                             if isInstallAction then
-                                ModInstaller.install game exePath plan installMode installArch optiApi useNeuralAddon this.OverlayOptions report
+                                ModInstaller.install game exePath plan installMode installArch optiApi useNeuralAddon useMfgUnlock useMultipass this.OverlayOptions report
                             else
                                 ModInstaller.uninstall game exePath plan report
 
@@ -2030,6 +2181,11 @@ type MainViewModel() as this =
 
                 Dispatcher.UIThread.Post(fun () ->
                     this.IsInstalling <- false
+
+                    // A calm chime for a finished install, the same notes falling
+                    // for a removal. Nothing on a failure.
+                    if succeeded then
+                        if isInstallAction then UiSounds.installDone () else UiSounds.uninstallDone ()
                     this.InstallResultIsError <- not succeeded
                     this.InstallResultText <- message
                     this.InstallProgress <- (if succeeded then 100.0 else 0.0)

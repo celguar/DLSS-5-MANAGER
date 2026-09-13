@@ -27,14 +27,14 @@ open Microsoft.Win32
 module CommunityApi =
 
     [<Literal>]
-    let BaseUrl = "your-worker"
+    let BaseUrl = "https://dlss5manager-community-api.gtagatgta9.workers.dev"
 
     /// Must match `wrangler secret put APP_SECRET` on the Worker.
     [<Literal>]
-    let AppSecret = "lol i can not give this"
+    let AppSecret = "BRO-THIS-NOT-PUBLIC"
 
     [<Literal>]
-    let TutorialsUrl = "https://dlss5manager.numidiastudios.com/tutorials"
+    let TutorialsUrl = "https://dlss5manager.app/tutorials"
 
     /// The five reactions, in the order the server stores them (slot 1..5).
     let reactionEmoji = [| "❤️"; "\U0001F44D"; "\U0001F525"; "\U0001F389"; "\U0001F615" |]
@@ -258,14 +258,21 @@ module CommunityApi =
         send<SimpleResponse> HttpMethod.Post "/v1/profile" body
         |> Result.map (fun r -> if isNull r.Name then name else r.Name)
 
-    /// Returns the page and the server's own total, which is what the header
-    /// counts - the page stops at 100 and would otherwise undercount.
-    let listGames (query: string) (route: string) (result: string) : Result<GameDto[] * int, string> =
+    /// One page of the grid, plus the server's own total - which is what the
+    /// header counts, since a page never holds all of them.
+    let listGames
+        (query: string)
+        (route: string)
+        (result: string)
+        (offset: int)
+        (limit: int)
+        : Result<GameDto[] * int, string> =
         let parts =
             [ if not (String.IsNullOrWhiteSpace(query)) then yield "q=" + Uri.EscapeDataString(query.Trim())
               if not (String.IsNullOrWhiteSpace(route)) then yield "route=" + Uri.EscapeDataString(route)
               if not (String.IsNullOrWhiteSpace(result)) then yield "result=" + Uri.EscapeDataString(result)
-              yield "limit=100" ]
+              yield sprintf "offset=%d" (max 0 offset)
+              yield sprintf "limit=%d" (max 1 limit) ]
 
         send<GamesResponse> HttpMethod.Get ("/v1/games?" + String.Join("&", parts)) ""
         |> Result.map (fun r ->
@@ -325,3 +332,282 @@ module CommunityApi =
     let toggleReaction (reportId: string) (slot: int) : Result<bool, string> =
         let body = sprintf "{\"report_id\":\"%s\",\"slot\":%d}" (escape reportId) slot
         send<SimpleResponse> HttpMethod.Post "/v1/reactions" body |> Result.map (fun r -> r.On)
+
+    // =======================================================================
+    // 1.2.3 - CHEAPER READS
+    //
+    // The functions above stay for apps still on 1.2.2. These are what 1.2.3
+    // calls, and each one exists to take requests or D1 rows off the bill.
+    // =======================================================================
+
+    [<CLIMutable>]
+    type GamesPageResponse =
+        { [<JsonPropertyName("ok")>] Ok: bool
+          [<JsonPropertyName("error")>] Error: string
+          [<JsonPropertyName("total")>] Total: int
+          [<JsonPropertyName("next")>] Next: string
+          [<JsonPropertyName("games")>] Games: GameDto[] }
+
+    /// One page of the grid, sought by cursor rather than skipped to by offset.
+    ///
+    /// `after` is the `next` the previous page handed back, or "" for the first
+    /// page. With an offset the database reads every row it skips - page eight
+    /// cost 160 rows to return twenty. A cursor seeks straight to the page.
+    ///
+    /// `sort` is "recent", "reports" or "title".
+    let listGamesPage
+        (query: string)
+        (route: string)
+        (result: string)
+        (sort: string)
+        (after: string)
+        (limit: int)
+        : Result<GameDto[] * int * string, string> =
+        let parts =
+            [ if not (String.IsNullOrWhiteSpace(query)) then yield "q=" + Uri.EscapeDataString(query.Trim())
+              if not (String.IsNullOrWhiteSpace(route)) then yield "route=" + Uri.EscapeDataString(route)
+              if not (String.IsNullOrWhiteSpace(result)) then yield "result=" + Uri.EscapeDataString(result)
+              if not (String.IsNullOrWhiteSpace(sort)) then yield "sort=" + Uri.EscapeDataString(sort)
+              if not (String.IsNullOrWhiteSpace(after)) then yield "after=" + Uri.EscapeDataString(after)
+              yield sprintf "limit=%d" (max 1 limit) ]
+
+        send<GamesPageResponse> HttpMethod.Get ("/v1/games?" + String.Join("&", parts)) ""
+        |> Result.map (fun r ->
+            let games = if isNull (box r.Games) then [||] else r.Games
+            games, max r.Total games.Length, (if isNull r.Next then "" else r.Next))
+
+    [<CLIMutable>]
+    type FeedResponse =
+        { [<JsonPropertyName("ok")>] Ok: bool
+          [<JsonPropertyName("error")>] Error: string
+          [<JsonPropertyName("reports")>] Reports: ReportDto[]
+          [<JsonPropertyName("routes")>] Routes: RouteStatDto[] }
+
+    /// A game's reports and its per-route tally in one request. Opening a game
+    /// used to cost two - `getGame` for the chips, `listReports` for the posts.
+    /// The tally only comes back when no route is picked, which is the only
+    /// time the chips are rebuilt.
+    let listFeed (gameId: string) (route: string) : Result<ReportDto[] * RouteStatDto[], string> =
+        let q =
+            if String.IsNullOrWhiteSpace(route) then ""
+            else "?route=" + Uri.EscapeDataString(route)
+
+        send<FeedResponse> HttpMethod.Get ("/v1/games/" + Uri.EscapeDataString(gameId) + "/reports" + q) ""
+        |> Result.map (fun r ->
+            (if isNull (box r.Reports) then [||] else r.Reports),
+            (if isNull (box r.Routes) then [||] else r.Routes))
+
+    /// Replies under a report. `known` is how many there are as far as this
+    /// app knows, and it rides in the URL only so the edge cache sees a new
+    /// address after a reply - otherwise the reply just posted would be served
+    /// from a copy taken before it existed.
+    let listCommentsFresh (reportId: string) (known: int) : Result<CommentDto[], string> =
+        send<CommentsResponse> HttpMethod.Get (sprintf "/v1/reports/%s/comments?n=%d" (Uri.EscapeDataString(reportId)) known) ""
+        |> Result.map (fun r -> if isNull (box r.Comments) then [||] else r.Comments)
+
+    // =======================================================================
+    // PULSE - the chat
+    // =======================================================================
+
+    /// One emoji under a message and how many people tapped it.
+    [<CLIMutable>]
+    type ChatReactionDto =
+        { [<JsonPropertyName("e")>] E: string
+          [<JsonPropertyName("n")>] N: int }
+
+    /// What a reply answers - a copy made when the reply was sent, so drawing
+    /// it never needs the original.
+    [<CLIMutable>]
+    type ChatReplyDto =
+        { [<JsonPropertyName("id")>] Id: int64
+          [<JsonPropertyName("author")>] Author: string
+          [<JsonPropertyName("body")>] Body: string }
+
+    [<CLIMutable>]
+    type ChatMessageDto =
+        { [<JsonPropertyName("id")>] Id: int64
+          [<JsonPropertyName("author")>] Author: string
+          /// A short one-way tag of the sender's device, so this app can tell
+          /// its own messages apart without the server ever publishing a
+          /// fingerprint. See `pulseTag`.
+          [<JsonPropertyName("tag")>] Tag: string
+          [<JsonPropertyName("dev")>] Dev: bool
+          [<JsonPropertyName("body")>] Body: string
+          [<JsonPropertyName("image")>] Image: string
+          [<JsonPropertyName("w")>] W: int
+          [<JsonPropertyName("h")>] H: int
+          [<JsonPropertyName("created")>] Created: int64
+          /// null when the message is not a reply.
+          [<JsonPropertyName("reply")>] Reply: ChatReplyDto
+          [<JsonPropertyName("rx")>] Rx: ChatReactionDto[] }
+
+    /// A message already on screen whose reactions changed.
+    [<CLIMutable>]
+    type ChatUpdateDto =
+        { [<JsonPropertyName("id")>] Id: int64
+          [<JsonPropertyName("rx")>] Rx: ChatReactionDto[] }
+
+    [<CLIMutable>]
+    type ChatResponse =
+        { [<JsonPropertyName("ok")>] Ok: bool
+          [<JsonPropertyName("error")>] Error: string
+          [<JsonPropertyName("messages")>] Messages: ChatMessageDto[]
+          /// Ids removed recently. A poll only asks for what is new, so without
+          /// this a deleted message would stay on every screen that had it.
+          [<JsonPropertyName("removed")>] Removed: int64[]
+          /// True when there is older history than the oldest message sent.
+          [<JsonPropertyName("more")>] More: bool
+          /// The reaction counter now; sent back on the next poll.
+          [<JsonPropertyName("rev")>] Rev: int64
+          /// Reaction changes since the rev the poll sent.
+          [<JsonPropertyName("updates")>] Updates: ChatUpdateDto[] }
+
+    [<CLIMutable>]
+    type ChatReactResponse =
+        { [<JsonPropertyName("ok")>] Ok: bool
+          [<JsonPropertyName("error")>] Error: string
+          /// Whether this device's reaction is now on or off.
+          [<JsonPropertyName("on")>] On: bool
+          [<JsonPropertyName("rx")>] Rx: ChatReactionDto[] }
+
+    /// The six reactions, in the order they are offered. Must match the
+    /// Worker's CHAT_REACTIONS exactly - the heart carries U+FE0F.
+    let chatReactions =
+        [| "\U0001F44D"; "❤️"; "\U0001F602"; "\U0001F62E"; "\U0001F622"; "\U0001F525" |]
+
+    [<CLIMutable>]
+    type ChatPostResponse =
+        { [<JsonPropertyName("ok")>] Ok: bool
+          [<JsonPropertyName("error")>] Error: string
+          [<JsonPropertyName("message")>] Message: ChatMessageDto }
+
+    [<CLIMutable>]
+    type ImageUploadResponse =
+        { [<JsonPropertyName("ok")>] Ok: bool
+          [<JsonPropertyName("error")>] Error: string
+          [<JsonPropertyName("key")>] Key: string }
+
+    /// This device's tag, computed the same way the Worker computes it:
+    /// SHA-256 of "pulse:" plus the fingerprint, first ten hex digits. It can
+    /// be matched against a message but not turned back into the fingerprint.
+    let pulseTag = lazy ((sha256Hex ("pulse:" + fingerprint.Value)).Substring(0, 10))
+
+    let private sha256OfBytes (bytes: byte[]) =
+        use sha = SHA256.Create()
+        sha.ComputeHash(bytes) |> Array.map (fun b -> b.ToString("x2")) |> String.concat ""
+
+    /// The same four signed headers `send` adds, for a body that is not text.
+    let private signedRequest (method: HttpMethod) (pathAndQuery: string) (bodyHash: string) =
+        let ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+        let fp = fingerprint.Value
+        let payload = String.Join("\n", [| method.Method; pathAndQuery; string ts; fp; bodyHash |])
+
+        let req = new HttpRequestMessage(method, BaseUrl + pathAndQuery)
+        req.Headers.Add("X-DLSS5-App", "DLSS5MANAGER/" + UpdateChecker.CurrentVersion)
+        req.Headers.Add("X-DLSS5-FP", fp)
+        req.Headers.Add("X-DLSS5-TS", string ts)
+        req.Headers.Add("X-DLSS5-Sig", hmacHex payload)
+        req
+
+    let private errorOf (res: HttpResponseMessage) (text: string) =
+        try
+            let doc = JsonDocument.Parse(text)
+
+            match doc.RootElement.TryGetProperty("error") with
+            | true, e -> e.GetString()
+            | _ -> sprintf "Server returned %d." (int res.StatusCode)
+        with _ ->
+            sprintf "Server returned %d." (int res.StatusCode)
+
+    /// Messages newer than `afterId`, oldest first (0 asks for the latest
+    /// page), plus the reaction changes since `rev`.
+    let chatSince (afterId: int64) (rev: int64) : Result<ChatResponse, string> =
+        send<ChatResponse> HttpMethod.Get (sprintf "/v1/chat?after=%d&rev=%d" (max 0L afterId) (max 0L rev)) ""
+
+    /// History from before `beforeId`, for scrolling back.
+    let chatBefore (beforeId: int64) : Result<ChatResponse, string> =
+        send<ChatResponse> HttpMethod.Get (sprintf "/v1/chat?before=%d" (max 0L beforeId)) ""
+
+    /// Taps one reaction on or off. Returns whether it is now on, and the tally.
+    let reactChat (id: int64) (emoji: string) : Result<bool * ChatReactionDto[], string> =
+        send<ChatReactResponse> HttpMethod.Post "/v1/chat/react" (sprintf "{\"id\":%d,\"emoji\":\"%s\"}" id (escape emoji))
+        |> Result.map (fun r -> r.On, (if isNull (box r.Rx) then [||] else r.Rx))
+
+    /// `replyTo` is the id being answered, or 0.
+    let postChat (body: string) (imageKey: string) (width: int) (height: int) (replyTo: int64) : Result<ChatMessageDto, string> =
+        let payload =
+            sprintf
+                "{\"body\":\"%s\",\"image\":\"%s\",\"w\":%d,\"h\":%d,\"reply\":%d}"
+                (escape body)
+                (escape imageKey)
+                (max 0 width)
+                (max 0 height)
+                (max 0L replyTo)
+
+        send<ChatPostResponse> HttpMethod.Post "/v1/chat" payload
+        |> Result.bind (fun r ->
+            if isNull (box r.Message) then Error "The server did not return the message."
+            else Ok r.Message)
+
+    let deleteChat (id: int64) : Result<unit, string> =
+        send<SimpleResponse> HttpMethod.Post "/v1/chat/delete" (sprintf "{\"id\":%d}" id) |> Result.map ignore
+
+    /// Sends an already-encoded WebP and gets back the key it is stored under.
+    let uploadChatImage (webp: byte[]) : Result<string, string> =
+        try
+            use req = signedRequest HttpMethod.Post "/v1/chat/image" (sha256OfBytes webp)
+            let content = new ByteArrayContent(webp)
+            content.Headers.ContentType <- Headers.MediaTypeHeaderValue("image/webp")
+            req.Content <- content
+
+            use res = client.Value.Send(req)
+            let text = res.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+
+            if res.IsSuccessStatusCode then
+                let parsed = JsonSerializer.Deserialize<ImageUploadResponse>(text, jsonOptions)
+
+                if isNull (box parsed) || String.IsNullOrWhiteSpace(parsed.Key) then
+                    Error "The server did not return the picture."
+                else
+                    Ok parsed.Key
+            else
+                Error(errorOf res text)
+        with
+        | :? TaskCanceledException -> Error "The upload did not finish in time."
+        | ex -> Error ex.Message
+
+    /// The bytes of one chat image. Callers keep a disk copy - an image never
+    /// changes under its key, so it is fetched from here once, ever.
+    let getChatImage (key: string) : Result<byte[], string> =
+        try
+            use req = signedRequest HttpMethod.Get ("/v1/chat/image/" + Uri.EscapeDataString(key)) (sha256Hex "")
+            use res = client.Value.Send(req)
+
+            if res.IsSuccessStatusCode then
+                Ok(res.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult())
+            else
+                Error(sprintf "Server returned %d." (int res.StatusCode))
+        with ex ->
+            Error ex.Message
+
+
+/// What the community grid can be filtered and sorted by, and the words the
+/// toolbar shows for each. Kept beside the API because the keys are exactly
+/// what the Worker's query string takes.
+module CommunityFilters =
+
+    /// "reshade" is all three ReShade routes. The old toolbar sent "dx12" for
+    /// its RESHADE button, which silently hid every DX11 and DX9 report.
+    let routeKeys = [| ""; "optiscaler"; "reshade"; "emulator"; "amd" |]
+    let routeLabels = [| "All routes"; "OptiScaler"; "ReShade"; "Emulator"; "AMD" |]
+
+    let resultKeys = [| ""; "working"; "mixed"; "broken" |]
+    let resultLabels = [| "Any result"; "Working"; "Mixed"; "Not working" |]
+
+    let sortKeys = [| "recent"; "reports"; "title" |]
+    let sortLabels = [| "Most recent"; "Most reports"; "A to Z" |]
+
+    /// Index to key, or "" for anything out of range - a dropdown with nothing
+    /// selected reports -1.
+    let keyAt (keys: string[]) (index: int) =
+        if index >= 0 && index < keys.Length then keys.[index] else ""

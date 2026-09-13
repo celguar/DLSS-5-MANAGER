@@ -52,6 +52,12 @@ module ModInstaller =
           /// DX9 / AMD install. Empty everywhere else, and on every manifest
           /// written before the option existed.
           Neural: string
+          /// "1" when renodx-mfgunlock.addon64 travelled with a 64-bit DX12 /
+          /// DX11 / DX9 install. Empty everywhere else and on older manifests.
+          MfgUnlock: string
+          /// "1" when the Multipass build of RenoDX (renodx-dlss5.addon64) was
+          /// installed in place of the ordinary one. Same rules as above.
+          Multipass: string
           Files: InstalledFile[] }
 
     /// The mutually exclusive install routes offered in the Manage sheet.
@@ -284,9 +290,10 @@ module ModInstaller =
     // =====================================================================
     let renodxAddonName = "renodx-dlss.addon64"
 
-    /// What the same add-on was called up to 1.2.0. Nothing deploys it any
-    /// more, but installs made while it had that name still have to come off
-    /// cleanly, so it stays in `exclusiveArtifacts` below.
+    /// What the same add-on was called up to 1.2.0 - and, since 1.2.5, the
+    /// Multipass build of RenoDX that the install option of that name deploys
+    /// in place of `renodxAddonName`. Either way it stays in
+    /// `exclusiveArtifacts` below, so it always comes off cleanly.
     let renodxAddonLegacyName = "renodx-dlss5.addon64"
 
     /// Ships next to the RenoDX add-on and must always travel with it.
@@ -301,6 +308,11 @@ module ModInstaller =
     /// gets it inside host64 where the rest of the 64-bit modules already run.
     let neuralAddonName = "nvngx.dll.addon64"
 
+    /// RenoDX's MFG unlock add-on. Optional per install, and it only makes sense
+    /// beside RenoDX itself - so the 64-bit DX12 / DX11 / DX9 installs, next to
+    /// the executable.
+    let mfgUnlockAddonName = "renodx-mfgunlock.addon64"
+
     // =====================================================================
     // IN-GAME OVERLAY
     // =====================================================================
@@ -308,6 +320,12 @@ module ModInstaller =
     /// to draw through. Every ReShade route already has one; the OptiScaler
     /// route does not, and gets one of its own - see `deployOverlay`.
     let overlayAddonName = "dlss5-overlay.addon64"
+
+    /// The 32-bit build of the overlay. A 32-bit game loads a 32-bit ReShade,
+    /// which only ever loads ".addon32" - so the 64-bit file beside a DX9 title
+    /// was simply never picked up, which is what made the overlay look missing
+    /// on that route.
+    let overlayAddon32Name = "dlss5-overlay.addon32"
 
     /// The overlay reads its own settings from here, beside the game. The app
     /// writes it at install time; the overlay writes it back when the user
@@ -424,9 +442,9 @@ module ModInstaller =
     /// this list. Anything already handled by the manifest is skipped.
     let exclusiveArtifacts =
         [| "dlssnr_on_amd.ini"; "dlssnr_on_amd.log"; "dlss5-feed.addon64"; "dlss5-feed.addon32"
-           renodxAddonName; renodxAddonLegacyName
+           renodxAddonName; renodxAddonLegacyName; mfgUnlockAddonName
            "nvngx_dlssnr.dll"; "nvngx.dll_dlssnr.dll"; "nvngx.dll.addon64"
-           "dlss5-overlay.addon64"; "dlss5-overlay.ini"; "dlss5-overlay.ini.bak"; "dlss5-overlay.log"
+           "dlss5-overlay.addon64"; "dlss5-overlay.addon32"; "dlss5-overlay.ini"; "dlss5-overlay.ini.bak"; "dlss5-overlay.log"
            "OptiScaler.ini"; "OptiScaler.log"; "Remove_OptiScaler.bat"; "setup_windows.bat"
            "dgVoodoo.conf"; "dgVoodooCpl.exe"
            "deep-fried-chicken-nvngx.dll"; "deep-fried-chicken.addon64"; "deep-fried-chicken.cfg" |]
@@ -441,17 +459,21 @@ module ModInstaller =
     /// is not sitting loose among the small ones.
     let dlss5DirName = "dlss 5"
 
+    /// The plain OptiScaler build, dropped in 1.2.1. The folder no longer
+    /// ships; the name is kept only so an uninstall can still find files a
+    /// previous version deployed from it.
     let optiScalerDirName = "if OptiScaler"
 
-    /// The neural upstream build of OptiScaler. Same shape as the folder above
-    /// and hooked the same way, so the route only has to pick between the two.
+    /// The one OptiScaler build that ships. It is hooked exactly like the plain
+    /// one was, so nothing about the route changed except which folder it reads.
     let optiScalerNeuralDirName = "if OptiScaler neural-upstream"
 
     /// Which OptiScaler payload an API choice reads from.
-    let optiScalerPayloadDirName (api: OptiScalerApi) =
-        match api with
-        | OptiNeural -> optiScalerNeuralDirName
-        | _ -> optiScalerDirName
+    ///
+    /// Both of them read the same one now. The API choice decides only which
+    /// DLL name OptiScaler is dropped in as - `dxgi.dll` for DirectX 12,
+    /// `winmm.dll` for Vulkan - which is what `pickOptiScalerSlot` does.
+    let optiScalerPayloadDirName (_api: OptiScalerApi) = optiScalerNeuralDirName
 
     /// Exactly the menu OptiScaler's setup offers, in its own order. The first
     /// name the game does not already use is the one that cannot clash.
@@ -534,7 +556,9 @@ module ModInstaller =
             // The neural upstream add-on is optional per install, but a route
             // that can carry it still owns the name.
             let addons =
-                Set.ofList [ renodxAddonName; feedAddonName; feedAddon32Name; neuralAddonName ]
+                Set.ofList
+                    [ renodxAddonName; renodxAddonLegacyName; mfgUnlockAddonName
+                      feedAddonName; feedAddon32Name; neuralAddonName ]
 
             match routeKey with
             | "optiscaler" ->
@@ -997,6 +1021,23 @@ module ModInstaller =
         with _ ->
             false
 
+    /// The two RenoDX options the recorded install carried: (MFG unlock,
+    /// Multipass). A manifest written before they existed reads back as
+    /// (false, false), which is what those installs were.
+    let installedRenoDxOptions (game: GameItem) : bool * bool =
+        try
+            let path = manifestPath game
+
+            if File.Exists(path) then
+                let options = JsonSerializerOptions()
+                options.PropertyNameCaseInsensitive <- true
+                let m = JsonSerializer.Deserialize<InstallManifest>(File.ReadAllText(path), options)
+                (not (String.IsNullOrWhiteSpace(m.MfgUnlock)), not (String.IsNullOrWhiteSpace(m.Multipass)))
+            else
+                (false, false)
+        with _ ->
+            (false, false)
+
     let inspect (game: GameItem) (exePath: string) (dlssDirs: string[]) (streamlineDirs: string[]) : Dlss5Status =
         let managed = isInstalled game
 
@@ -1070,7 +1111,10 @@ module ModInstaller =
             else
                 if not (GameAnalyzer.isReShadeInstalled exePath) then missing.Add("ReShade")
 
-                if not (File.Exists(Path.Combine(exeDir, renodxAddonName))) then
+                // The Multipass option installs renodx-dlss5 in place of
+                // renodx-dlss, so either one is RenoDX being there.
+                if not (File.Exists(Path.Combine(exeDir, renodxAddonName)))
+                   && not (File.Exists(Path.Combine(exeDir, renodxAddonLegacyName))) then
                     missing.Add("RenoDX DLSS 5 add-on")
 
                 if not (File.Exists(Path.Combine(exeDir, feedAddonName))) then
@@ -1351,19 +1395,23 @@ module ModInstaller =
         (tracker: Tracker)
         (exeDir: string)
         (modRoot: string)
+        (is32Bit: bool)
         (overlay: OverlayOptions)
         (report: Progress)
         (at: float)
         : bool =
 
-        let source = Path.Combine(modRoot, overlayAddonName)
+        // The bitness has to match the ReShade that will load it, which is the
+        // game's own. A 64-bit file beside a 32-bit game is simply ignored.
+        let addonName = if is32Bit then overlayAddon32Name else overlayAddonName
+        let source = Path.Combine(modRoot, addonName)
 
         if not overlay.Enabled || not (File.Exists(source)) then
             false
         else
 
         report "Installing the in-game overlay..." at
-        tracker.Copy(source, Path.Combine(exeDir, overlayAddonName))
+        tracker.Copy(source, Path.Combine(exeDir, addonName))
 
         // The theme the user picked in Settings. Everything else is left for
         // the overlay's own Settings tab to write, so re-installing never
@@ -1591,6 +1639,11 @@ module ModInstaller =
         /// DX9 and AMD routes. OptiScaler has its own neural payload and
         /// ignores this.
         (neural: bool)
+        /// The RenoDX options, 64-bit DX12 / DX11 / DX9 only: the MFG unlock
+        /// add-on beside RenoDX, and the Multipass build of RenoDX in place of
+        /// the ordinary one. Every other route ignores both.
+        (mfgUnlock: bool)
+        (multipass: bool)
         /// The in-game overlay, as set up in Settings. Ignored on any route
         /// `overlaySupported` says no to.
         (overlay: OverlayOptions)
@@ -1638,6 +1691,13 @@ module ModInstaller =
             let neuralWanted = neural && mode <> OptiScalerMode && mode <> Emulator
             let neuralAddonFile = Path.Combine(modRoot, neuralAddonName)
 
+            // The RenoDX options only mean something where RenoDX is installed:
+            // the DX12 / DX11 / DX9 routes on a 64-bit game. A 32-bit install
+            // carries no RenoDX at all.
+            let renodxRoute = (mode = Dx12Auto || mode = Dx11 || mode = Dx9) && arch <> Bit32
+            let mfgUnlockWanted = mfgUnlock && renodxRoute
+            let multipassWanted = multipass && renodxRoute
+
             // The overlay only travels with the routes that can actually host
             // it, whatever the settings page happens to say.
             let overlayWanted =
@@ -1660,6 +1720,8 @@ module ModInstaller =
                       Arch = archKey arch
                       Api = optiApiKey optiApi
                       Neural = (if neuralWanted then "1" else "")
+                      MfgUnlock = (if mfgUnlockWanted then "1" else "")
+                      Multipass = (if multipassWanted then "1" else "")
                       Files = tracker.Entries }
 
                 let options = JsonSerializerOptions()
@@ -1754,9 +1816,8 @@ module ModInstaller =
                         " • ",
                         [ yield
                               (match optiApi with
-                               | OptiNeural -> "OptiScaler neural-upstream installed"
                                | OptiVulkan -> "Vulkan + OptiScaler installed"
-                               | OptiDx12 -> "DX12 + OptiScaler (recommended) installed")
+                               | _ -> "DirectX 12 + OptiScaler installed")
                           yield sprintf "%d OptiScaler file(s) deployed" (deployed + 1)
                           yield sprintf "Hooked as %s" slotName
                           yield! optiRuntimes.Summary
@@ -1910,7 +1971,7 @@ module ModInstaller =
                 report "Deploying DLSS 5 ray reconstruction model (165 MB)..." 0.74
                 copyIfEnabled tracker dlssnrFileName dlssnrFile (Path.Combine(exeDir, dlssnrFileName)) |> ignore
 
-                let overlayFiles = deployOverlay tracker exeDir modRoot overlayWanted report 0.82
+                let overlayFiles = deployOverlay tracker exeDir modRoot false overlayWanted report 0.82
                 let extraFiles = deployExtras tracker exeDir mode arch optiApi report 0.90
 
 
@@ -1940,7 +2001,11 @@ module ModInstaller =
             let isDx9 = (mode = Dx9)
             let is32Bit = (arch = Bit32)
             let setupExe = reShadeSetupPath ()
-            let addonFile = Path.Combine(modRoot, renodxAddonName)
+            // Multipass swaps which build of RenoDX goes in - same folder, same
+            // role, only the file differs.
+            let renodxName = if multipassWanted then renodxAddonLegacyName else renodxAddonName
+            let addonFile = Path.Combine(modRoot, renodxName)
+            let mfgUnlockFile = Path.Combine(modRoot, mfgUnlockAddonName)
             let feedAddonFile = Path.Combine(modRoot, feedAddonName)
             let feedAddon32File = Path.Combine(modRoot, feedAddon32Name)
             let host64Dir = Path.Combine(modRoot, bit32PayloadDirName, host64DirName)
@@ -1953,7 +2018,10 @@ module ModInstaller =
                   else
                       yield addonFile
                       yield feedAddonFile
-                      yield dlssnrFile ]
+                      yield dlssnrFile
+
+                      if mfgUnlockWanted then
+                          yield mfgUnlockFile ]
                 |> List.filter (fun p -> not (File.Exists(p)))
 
             if not missing.IsEmpty then
@@ -2120,8 +2188,16 @@ module ModInstaller =
                     copied + extra
                 else
                     report "Installing RenoDX DLSS 5 add-on..." 0.30
-                    copyIfEnabled tracker renodxAddonName addonFile (Path.Combine(exeDir, renodxAddonName)) |> ignore
+                    // The payload switch in Settings is the one RenoDX switch,
+                    // whichever build the Multipass option picked.
+                    copyIfEnabled tracker renodxAddonName addonFile (Path.Combine(exeDir, renodxName)) |> ignore
                     copyIfEnabled tracker feedAddonName feedAddonFile (Path.Combine(exeDir, feedAddonName)) |> ignore
+
+                    // MFG unlock sits right beside RenoDX, next to the executable.
+                    if mfgUnlockWanted then
+                        report "Installing the RenoDX MFG unlock add-on..." 0.32
+                        tracker.Copy(mfgUnlockFile, Path.Combine(exeDir, mfgUnlockAddonName))
+
                     0
 
             // -------------------------------------------------------------
@@ -2169,7 +2245,7 @@ module ModInstaller =
             // -------------------------------------------------------------
             // This route already installed ReShade, so the add-on needs
             // nothing beyond being put next to it.
-            let overlayFiles = deployOverlay tracker exeDir modRoot overlayWanted report 0.88
+            let overlayFiles = deployOverlay tracker exeDir modRoot is32Bit overlayWanted report 0.88
 
             // -------------------------------------------------------------
             // 6. Manifest
@@ -2207,6 +2283,12 @@ module ModInstaller =
 
                       if neuralDeployed then
                           yield "Neural upstream add-on deployed"
+
+                      if mfgUnlockWanted then
+                          yield "RenoDX MFG unlock add-on deployed"
+
+                      if multipassWanted then
+                          yield "Multipass build of RenoDX deployed"
 
                       if overlayFiles then
                           yield "Overlay installed"

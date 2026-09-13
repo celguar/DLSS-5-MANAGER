@@ -3,9 +3,11 @@ namespace DLSS_5_MANAGER.Views
 open System
 open System.Diagnostics
 open System.IO
+open System.Threading.Tasks
 open Avalonia
 open Avalonia.Controls
 open Avalonia.Input
+open Avalonia.Input.Platform
 open Avalonia.Interactivity
 open Avalonia.Markup.Xaml
 open Avalonia.Platform.Storage
@@ -72,6 +74,48 @@ type MainWindow() as this =
 
         this.Activated.Add(fun _ -> setMotion true)
         this.Deactivated.Add(fun _ -> setMotion false)
+
+        // The chat box: Ctrl+V may carry a picture, which a TextBox ignores.
+        // Tunnel, so this sees the key before the box pastes text on its own.
+        match this.FindControl<TextBox>("PulseDraftBox") with
+        | null -> ()
+        | chatBox ->
+            chatBox.AddHandler(
+                InputElement.KeyDownEvent,
+                EventHandler<KeyEventArgs>(fun _ e ->
+                    if e.Key = Key.V && e.KeyModifiers.HasFlag(KeyModifiers.Control) then
+                        e.Handled <- true
+                        this.PasteIntoChat(chatBox)
+                    // Enter sends; Shift+Enter starts a new line. The box accepts
+                    // returns, so plain Enter is taken here, before the box turns
+                    // it into a line break of its own.
+                    elif e.Key = Key.Enter && not (e.KeyModifiers.HasFlag(KeyModifiers.Shift)) then
+                        e.Handled <- true
+
+                        match this.DataContext with
+                        | :? MainViewModel as vm -> vm.Pulse.Send()
+                        | _ -> ()),
+                RoutingStrategies.Tunnel
+            )
+
+        // The reply alert watches from the moment the window is up. It sends
+        // nothing until this device has written in the chat at least once.
+        this.Opened.Add(fun _ ->
+            match this.DataContext with
+            | :? MainViewModel as vm -> vm.Pulse.StartWatch()
+            | _ -> ())
+
+        // Esc closes the chat's picture viewer.
+        this.AddHandler(
+            InputElement.KeyDownEvent,
+            EventHandler<KeyEventArgs>(fun _ e ->
+                match this.DataContext with
+                | :? MainViewModel as vm when e.Key = Key.Escape && vm.Pulse.IsViewerOpen ->
+                    vm.Pulse.CloseViewer()
+                    e.Handled <- true
+                | _ -> ()),
+            RoutingStrategies.Tunnel
+        )
 
         smoothScrollTimer.Tick.Add(fun _ ->
             let sv = activeScrollViewer
@@ -286,6 +330,19 @@ type MainWindow() as this =
         | :? MainViewModel as vm -> this.OpenExternal(vm.Community.TutorialsUrl)
         | _ -> ()
 
+    /// Asks for the next page once the grid is within a screen of its end, so
+    /// the rows are already there by the time the user reaches them. The
+    /// view-model ignores the call when there is nothing more or a page is
+    /// already on the way, so firing on every scroll event costs nothing.
+    member this.OnCommunityScrolled(sender: obj, e: ScrollChangedEventArgs) =
+        match this.DataContext, sender with
+        | (:? MainViewModel as vm), (:? ScrollViewer as sv) ->
+            let remaining = sv.Extent.Height - sv.Viewport.Height - sv.Offset.Y
+
+            if remaining < sv.Viewport.Height then
+                vm.Community.LoadMore()
+        | _ -> ()
+
     member this.OnCommunityRefreshClicked(sender: obj, e: RoutedEventArgs) =
         match this.DataContext with
         | :? MainViewModel as vm -> vm.Community.Refresh()
@@ -293,16 +350,303 @@ type MainWindow() as this =
 
     /// The filter chips carry their value in Tag, so one handler serves the
     /// whole row and adding a route later is a line of XAML.
-    member this.OnCommunityRouteClicked(sender: obj, e: RoutedEventArgs) =
-        match this.DataContext, sender with
-        | (:? MainViewModel as vm), (:? Control as ctrl) ->
-            vm.Community.SetRouteFilter(if isNull ctrl.Tag then "" else string ctrl.Tag)
+    // ---- the toolbar and the two halves of the section -------------------
+    member this.OnCommunityGamesTabClicked(sender: obj, e: RoutedEventArgs) =
+        match this.DataContext with
+        | :? MainViewModel as vm -> vm.ShowCommunityGames()
         | _ -> ()
 
-    member this.OnCommunityResultClicked(sender: obj, e: RoutedEventArgs) =
+    member this.OnPulseTabClicked(sender: obj, e: RoutedEventArgs) =
+        match this.DataContext with
+        | :? MainViewModel as vm -> vm.ShowPulse()
+        | _ -> ()
+
+    member this.OnCommunityClearFiltersClicked(sender: obj, e: RoutedEventArgs) =
+        match this.DataContext with
+        | :? MainViewModel as vm ->
+            vm.Community.ClearFilters()
+            vm.SearchText <- ""
+        | _ -> ()
+
+    /// The ✕ on the "Searching for" chip. The box belongs to the window, so
+    /// clearing it there is what brings the whole grid back.
+    member this.OnClearCommunitySearchClicked(sender: obj, e: RoutedEventArgs) =
+        match this.DataContext with
+        | :? MainViewModel as vm -> vm.SearchText <- ""
+        | _ -> ()
+
+    // ---- CHAT (PULSE) -----------------------------------------------------
+    /// Back to the message box, caret at the end - after Send, a reply, an emoji.
+    member private this.FocusChatBox() =
+        match this.FindControl<TextBox>("PulseDraftBox") with
+        | null -> ()
+        | box ->
+            box.Focus() |> ignore
+            box.CaretIndex <- (if isNull box.Text then 0 else box.Text.Length)
+
+    member this.OnPulseSendClicked(sender: obj, e: RoutedEventArgs) =
+        match this.DataContext with
+        | :? MainViewModel as vm ->
+            vm.Pulse.Send()
+            this.FocusChatBox()
+        | _ -> ()
+
+    /// Enter sends; Esc drops the reply. The box does not accept returns, so it
+    /// never swallows Enter first.
+    member this.OnPulseDraftKeyDown(sender: obj, e: KeyEventArgs) =
+        match this.DataContext with
+        | :? MainViewModel as vm when e.Key = Key.Enter ->
+            vm.Pulse.Send()
+            e.Handled <- true
+        | :? MainViewModel as vm when e.Key = Key.Escape && vm.Pulse.IsReplying ->
+            vm.Pulse.CancelReply()
+            e.Handled <- true
+        | _ -> ()
+
+    /// Ctrl+V in the message box. A picture file copied in Explorer, or a
+    /// picture on the clipboard (a screenshot, "Copy image"), becomes the
+    /// attachment; text is pasted as usual. Text wins when both are there, so
+    /// copying cells or a paragraph never turns into a picture by surprise.
+    member private this.PasteIntoChat(box: TextBox) =
+        match this.DataContext, TopLevel.GetTopLevel(this) with
+        | (:? MainViewModel as vm), top when not (isNull top) && not (isNull top.Clipboard) ->
+            let clipboard = top.Clipboard
+
+            let isPicture (path: string) =
+                not (isNull path)
+                && [ ".png"; ".jpg"; ".jpeg"; ".webp"; ".gif"; ".bmp" ]
+                   |> List.contains (Path.GetExtension(path).ToLowerInvariant())
+
+            task {
+                try
+                    let! files = clipboard.TryGetFilesAsync()
+
+                    let picture =
+                        if isNull files then None
+                        else files |> Seq.tryPick (fun f -> match f.TryGetLocalPath() with p when isPicture p -> Some p | _ -> None)
+
+                    match picture with
+                    | Some path -> vm.Pulse.AttachImage(path)
+                    | None ->
+                        let! text = clipboard.TryGetTextAsync()
+
+                        if not (String.IsNullOrEmpty(text)) then
+                            let clean = text.Replace("\r\n", " ").Replace('\n', ' ').Replace('\r', ' ')
+                            let current = if isNull box.Text then "" else box.Text
+                            let a = max 0 (min current.Length (min box.SelectionStart box.SelectionEnd))
+                            let b = max 0 (min current.Length (max box.SelectionStart box.SelectionEnd))
+                            box.Text <- current.Remove(a, b - a).Insert(a, clean)
+                            box.CaretIndex <- a + clean.Length
+                        else
+                            let! bitmap = clipboard.TryGetBitmapAsync()
+
+                            if not (isNull bitmap) then
+                                use ms = new MemoryStream()
+                                bitmap.Save(ms)
+                                vm.Pulse.AttachImageBytes(ms.ToArray())
+                with _ ->
+                    ()
+            }
+            |> ignore
+        | _ -> ()
+
+    member this.OnChatEmojiClicked(sender: obj, e: RoutedEventArgs) =
+        match sender, this.FindControl<TextBox>("PulseDraftBox") with
+        | (:? Control as ctrl), box when not (isNull box) ->
+            match ctrl.DataContext with
+            | :? ChatReactionViewModel as choice ->
+                let current = if isNull box.Text then "" else box.Text
+                let at = max 0 (min current.Length box.CaretIndex)
+                box.Text <- current.Insert(at, choice.Emoji)
+                box.Focus() |> ignore
+                box.CaretIndex <- at + choice.Emoji.Length
+            | _ -> ()
+        | _ -> ()
+
+    /// Chips under a message and the six on its hover bar alike.
+    member this.OnChatReactionClicked(sender: obj, e: RoutedEventArgs) =
         match this.DataContext, sender with
         | (:? MainViewModel as vm), (:? Control as ctrl) ->
-            vm.Community.SetResultFilter(if isNull ctrl.Tag then "" else string ctrl.Tag)
+            match ctrl.DataContext with
+            | :? ChatReactionViewModel as r -> vm.Pulse.ToggleReaction(r.MessageId, r.Emoji)
+            | _ -> ()
+        | _ -> ()
+
+    member this.OnChatReplyClicked(sender: obj, e: RoutedEventArgs) =
+        match this.DataContext, sender with
+        | (:? MainViewModel as vm), (:? Control as ctrl) ->
+            match ctrl.DataContext with
+            | :? PulseMessageViewModel as message ->
+                vm.Pulse.StartReply(message)
+                this.FocusChatBox()
+            | _ -> ()
+        | _ -> ()
+
+    member this.OnChatCancelReplyClicked(sender: obj, e: RoutedEventArgs) =
+        match this.DataContext with
+        | :? MainViewModel as vm -> vm.Pulse.CancelReply()
+        | _ -> ()
+
+    /// The quote above a reply takes you to the message it answers, when that
+    /// message is still loaded.
+    member this.OnChatReplyQuoteClicked(sender: obj, e: RoutedEventArgs) =
+        match this.DataContext, sender with
+        | (:? MainViewModel as vm), (:? Control as ctrl) ->
+            match ctrl.DataContext with
+            | :? PulseMessageViewModel as message ->
+                match vm.Pulse.TryFind(message.ReplyToId), this.FindControl<ItemsControl>("PulseMessagesList") with
+                | Some target, list when not (isNull list) ->
+                    match list.ContainerFromItem(target) with
+                    | null -> ()
+                    | container -> container.BringIntoView()
+                | _ -> ()
+            | _ -> ()
+        | _ -> ()
+
+    // ---- the picture viewer ----------------------------------------------
+    /// A picture loads when its box comes within reach of the visible part of
+    /// the chat - a screen's height either side, so it is ready by the time it
+    /// scrolls in - and not before. Opening the chat therefore fetches only
+    /// the pictures near the bottom, not every one in the history.
+    member this.OnChatImageViewportChanged(sender: obj, e: Avalonia.Layout.EffectiveViewportChangedEventArgs) =
+        match sender with
+        | :? Control as ctrl ->
+            match ctrl.DataContext with
+            | :? PulseMessageViewModel as message when not message.ImageStarted ->
+                let view = e.EffectiveViewport
+
+                if view.Width > 0.0 && view.Height > 0.0 then
+                    let reach = Rect(view.X, view.Y - view.Height, view.Width, view.Height * 3.0)
+
+                    if reach.Intersects(Rect(ctrl.Bounds.Size)) then
+                        message.EnsureImage()
+            | _ -> ()
+        | _ -> ()
+
+    // ---- the reply alert ---------------------------------------------------
+    member this.OnReplyToastPressed(sender: obj, e: PointerPressedEventArgs) =
+        match this.DataContext with
+        | :? MainViewModel as vm -> vm.OpenChatFromReply()
+        | _ -> ()
+
+    member this.OnReplyToastCloseClicked(sender: obj, e: RoutedEventArgs) =
+        match this.DataContext with
+        | :? MainViewModel as vm -> vm.Pulse.DismissReplyToast()
+        | _ -> ()
+
+    member this.OnChatImageClicked(sender: obj, e: RoutedEventArgs) =
+        match this.DataContext, sender with
+        | (:? MainViewModel as vm), (:? Control as ctrl) ->
+            match ctrl.DataContext with
+            | :? PulseMessageViewModel as message -> vm.Pulse.OpenViewer(message)
+            | _ -> ()
+        | _ -> ()
+
+    member this.OnChatViewerCloseClicked(sender: obj, e: RoutedEventArgs) =
+        match this.DataContext with
+        | :? MainViewModel as vm -> vm.Pulse.CloseViewer()
+        | _ -> ()
+
+    member this.OnChatViewerBackdropPressed(sender: obj, e: PointerPressedEventArgs) =
+        match this.DataContext with
+        | :? MainViewModel as vm -> vm.Pulse.CloseViewer()
+        | _ -> ()
+
+    /// Saves where the user chooses. PNG by default - everything opens it -
+    /// or the original WebP, byte for byte.
+    member this.OnChatViewerSaveClicked(sender: obj, e: RoutedEventArgs) =
+        match this.DataContext with
+        | :? MainViewModel as vm when not (isNull vm.Pulse.ViewerBytes) ->
+            let bytes = vm.Pulse.ViewerBytes
+            let name = vm.Pulse.ViewerFileName
+
+            task {
+                try
+                    let options =
+                        FilePickerSaveOptions(
+                            Title = "Save picture",
+                            SuggestedFileName = name,
+                            DefaultExtension = "png",
+                            ShowOverwritePrompt = true
+                        )
+
+                    options.FileTypeChoices <-
+                        [| FilePickerFileType("PNG image", Patterns = [| "*.png" |])
+                           FilePickerFileType("WebP image", Patterns = [| "*.webp" |]) |]
+
+                    let! file = this.StorageProvider.SaveFilePickerAsync(options)
+
+                    if not (isNull file) then
+                        let asWebp = file.Name.EndsWith(".webp", StringComparison.OrdinalIgnoreCase)
+                        let! data = Task.Run(fun () -> if asWebp then bytes else ChatImages.toPng bytes)
+                        use! stream = file.OpenWriteAsync()
+                        do! stream.WriteAsync(data, 0, data.Length)
+                with _ ->
+                    ()
+            }
+            |> ignore
+        | _ -> ()
+
+    member this.OnPulseAttachClicked(sender: obj, e: RoutedEventArgs) =
+        match this.DataContext with
+        | :? MainViewModel as vm ->
+            task {
+                let options = FilePickerOpenOptions(Title = "Pick a picture", AllowMultiple = false)
+
+                options.FileTypeFilter <-
+                    [| FilePickerFileType(
+                           "Pictures",
+                           Patterns = [| "*.png"; "*.jpg"; "*.jpeg"; "*.webp"; "*.gif"; "*.bmp" |]
+                       ) |]
+
+                let! files = this.StorageProvider.OpenFilePickerAsync(options)
+
+                if files.Count > 0 then
+                    vm.Pulse.AttachImage(files.[0].Path.LocalPath)
+            }
+            |> ignore
+        | _ -> ()
+
+    member this.OnPulseRemoveImageClicked(sender: obj, e: RoutedEventArgs) =
+        match this.DataContext with
+        | :? MainViewModel as vm -> vm.Pulse.RemoveImage()
+        | _ -> ()
+
+    member this.OnPulseDeleteClicked(sender: obj, e: RoutedEventArgs) =
+        match this.DataContext, sender with
+        | (:? MainViewModel as vm), (:? Control as ctrl) ->
+            match ctrl.DataContext with
+            | :? PulseMessageViewModel as message -> vm.Pulse.Delete(message)
+            | _ -> ()
+        | _ -> ()
+
+    /// Keeps the conversation where the reader expects it.
+    ///
+    ///   - New messages below, and the reader was at the bottom: follow them.
+    ///   - History loaded above, and the reader was at the top: stay on the
+    ///     message they were looking at, instead of being thrown to the start.
+    ///   - Near the top: ask for the history before it.
+    member this.OnPulseScrolled(sender: obj, e: ScrollChangedEventArgs) =
+        match this.DataContext, sender with
+        | (:? MainViewModel as vm), (:? ScrollViewer as sv) ->
+            let grew = e.ExtentDelta.Y
+
+            if grew > 0.0 then
+                let extentBefore = sv.Extent.Height - grew
+                let fromBottomBefore = extentBefore - sv.Viewport.Height - sv.Offset.Y
+
+                if fromBottomBefore <= 120.0 then
+                    sv.ScrollToEnd()
+                elif sv.Offset.Y < 80.0 then
+                    sv.Offset <- Vector(sv.Offset.X, sv.Offset.Y + grew)
+
+            // Only when the reader scrolls up by hand. While content is being
+            // added the offset is briefly 0 (before the jump to the newest
+            // message), and reacting to that loaded page after page until the
+            // whole history was in memory.
+            if grew = 0.0 && e.OffsetDelta.Y < 0.0 && sv.Offset.Y < 60.0
+               && sv.Extent.Height > sv.Viewport.Height then
+                vm.Pulse.LoadOlder()
         | _ -> ()
 
     member this.OnCommunityClaimNameClicked(sender: obj, e: RoutedEventArgs) =
@@ -715,24 +1059,34 @@ type MainWindow() as this =
     // =====================================================================
     // MANAGE SHEET
     // =====================================================================
+    // A soft tick when the route really changes - not for a click on the one
+    // already picked.
     member this.OnSetOptiScalerMode(sender: obj, e: RoutedEventArgs) =
         match this.DataContext with
-        | :? MainViewModel as vm -> vm.SetInstallMode(ModInstaller.OptiScalerMode)
+        | :? MainViewModel as vm ->
+            if not vm.IsOptiScalerMode then UiSounds.tick ()
+            vm.SetInstallMode(ModInstaller.OptiScalerMode)
         | _ -> ()
 
     member this.OnSetDx12Mode(sender: obj, e: RoutedEventArgs) =
         match this.DataContext with
-        | :? MainViewModel as vm -> vm.SetInstallMode(ModInstaller.Dx12Auto)
+        | :? MainViewModel as vm ->
+            if not vm.IsDx12Mode then UiSounds.tick ()
+            vm.SetInstallMode(ModInstaller.Dx12Auto)
         | _ -> ()
 
     member this.OnSetDx11Mode(sender: obj, e: RoutedEventArgs) =
         match this.DataContext with
-        | :? MainViewModel as vm -> vm.SetInstallMode(ModInstaller.Dx11)
+        | :? MainViewModel as vm ->
+            if not vm.IsDx11Mode then UiSounds.tick ()
+            vm.SetInstallMode(ModInstaller.Dx11)
         | _ -> ()
 
     member this.OnSetDx9Mode(sender: obj, e: RoutedEventArgs) =
         match this.DataContext with
-        | :? MainViewModel as vm -> vm.SetInstallMode(ModInstaller.Dx9)
+        | :? MainViewModel as vm ->
+            if not vm.IsDx9Mode then UiSounds.tick ()
+            vm.SetInstallMode(ModInstaller.Dx9)
         | _ -> ()
 
     member this.OnSetOptiDx12(sender: obj, e: RoutedEventArgs) =
@@ -758,6 +1112,26 @@ type MainWindow() as this =
     member this.OnSetNeuralAddonOff(sender: obj, e: RoutedEventArgs) =
         match this.DataContext with
         | :? MainViewModel as vm -> vm.SetNeuralAddon(false)
+        | _ -> ()
+
+    member this.OnSetMfgUnlockOn(sender: obj, e: RoutedEventArgs) =
+        match this.DataContext with
+        | :? MainViewModel as vm -> vm.SetMfgUnlock(true)
+        | _ -> ()
+
+    member this.OnSetMfgUnlockOff(sender: obj, e: RoutedEventArgs) =
+        match this.DataContext with
+        | :? MainViewModel as vm -> vm.SetMfgUnlock(false)
+        | _ -> ()
+
+    member this.OnSetMultipassOn(sender: obj, e: RoutedEventArgs) =
+        match this.DataContext with
+        | :? MainViewModel as vm -> vm.SetMultipass(true)
+        | _ -> ()
+
+    member this.OnSetMultipassOff(sender: obj, e: RoutedEventArgs) =
+        match this.DataContext with
+        | :? MainViewModel as vm -> vm.SetMultipass(false)
         | _ -> ()
 
     member this.OnSetOverlayOn(sender: obj, e: RoutedEventArgs) =

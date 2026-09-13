@@ -1,11 +1,13 @@
 namespace DLSS_5_MANAGER.ViewModels
 
 open System
+open System.Collections
 open System.Collections.ObjectModel
 open System.IO
 open System.Net.Http
 open System.Security.Cryptography
 open System.Text
+open System.Threading
 open System.Threading.Tasks
 open Avalonia.Media
 open Avalonia.Media.Imaging
@@ -54,23 +56,57 @@ module CommunityShared =
         |> Array.map (fun b -> b.ToString("x2"))
         |> String.concat ""
 
-    /// Downloads once, then reads from disk forever. Returns None rather than
-    /// throwing - a missing cover is a placeholder, not an error.
+    /// Decoded artwork, kept for the life of the process and keyed by URL.
+    ///
+    /// Leaving the section and coming back rebuilds every card view-model, and
+    /// without this each one would go to disk and decode a JPEG again. The
+    /// bitmaps are small and there are at most a hundred of them.
+    let private decoded = Concurrent.ConcurrentDictionary<string, Bitmap>()
+
+    /// Four downloads at a time. The grid asks for every cover at once, and a
+    /// hundred simultaneous requests punish the connection without arriving any
+    /// sooner.
+    let private downloadSlots = new SemaphoreSlim(4)
+
+    /// What is already decoded, with no work at all. Used to paint a card that
+    /// has been on screen before without waiting for a thread.
+    let cachedCover (url: string) : Bitmap option =
+        if String.IsNullOrWhiteSpace(url) then None
+        else
+            match decoded.TryGetValue(url) with
+            | true, b -> Some b
+            | _ -> None
+
+    /// Downloads once, then reads from disk forever, then from memory. Returns
+    /// None rather than throwing - a missing cover is a placeholder, not an
+    /// error. Call this off the UI thread: it blocks.
     let loadCover (url: string) : Bitmap option =
         if String.IsNullOrWhiteSpace(url) then None
         else
-            try
-                let file = Path.Combine(coverCacheDir.Value, hashOf url + ".jpg")
+            match decoded.TryGetValue(url) with
+            | true, b -> Some b
+            | _ ->
+                try
+                    let file = Path.Combine(coverCacheDir.Value, hashOf url + ".jpg")
 
-                if not (File.Exists(file)) then
-                    let bytes = http.Value.GetByteArrayAsync(url).GetAwaiter().GetResult()
-                    if bytes.Length < 512 then failwith "empty"
-                    File.WriteAllBytes(file, bytes)
+                    if not (File.Exists(file)) then
+                        downloadSlots.Wait()
 
-                use stream = File.OpenRead(file)
-                Some(Bitmap.DecodeToWidth(stream, 420))
-            with _ ->
-                None
+                        try
+                            // Another card may have fetched it while this one
+                            // waited for a slot.
+                            if not (File.Exists(file)) then
+                                let bytes = http.Value.GetByteArrayAsync(url).GetAwaiter().GetResult()
+                                if bytes.Length < 512 then failwith "empty"
+                                File.WriteAllBytes(file, bytes)
+                        finally
+                            downloadSlots.Release() |> ignore
+
+                    use stream = File.OpenRead(file)
+                    let bitmap = Bitmap.DecodeToWidth(stream, 420)
+                    Some(decoded.GetOrAdd(url, bitmap))
+                with _ ->
+                    None
 
     /// "4 minutes ago" - short enough for a chip, precise enough to be useful.
     let ago (unixSeconds: int64) =
@@ -161,6 +197,47 @@ module CommunityShared =
     let isVerified (name: string) =
         not (String.IsNullOrWhiteSpace(name))
         && name.Trim().Equals(VerifiedName, StringComparison.OrdinalIgnoreCase)
+
+    // -----------------------------------------------------------------------
+    // In-app cache
+    //
+    // The Worker already caches at the edge, but a round trip is still a round
+    // trip: leaving the section and coming back, or flipping a filter back to
+    // one just used, should cost nothing at all. Answers are held here for a
+    // few minutes and thrown away the moment this app writes something, so a
+    // post the user just made never shows up missing from their own list.
+    // -----------------------------------------------------------------------
+    let private cacheLife = TimeSpan.FromMinutes(5.0)
+
+    let private listCache =
+        Concurrent.ConcurrentDictionary<string, DateTimeOffset * CommunityApi.GameDto[] * int>()
+
+    let private feedCache =
+        Concurrent.ConcurrentDictionary<string, DateTimeOffset * CommunityApi.ReportDto[] * CommunityApi.RouteStatDto[]>()
+
+    let private fresh (stamp: DateTimeOffset) = DateTimeOffset.UtcNow - stamp < cacheLife
+
+    let cachedList (key: string) =
+        match listCache.TryGetValue(key) with
+        | true, (stamp, games, total) when fresh stamp -> Some(games, total)
+        | _ -> None
+
+    let rememberList (key: string) (games: CommunityApi.GameDto[]) (total: int) =
+        listCache.[key] <- (DateTimeOffset.UtcNow, games, total)
+
+    let cachedFeed (key: string) =
+        match feedCache.TryGetValue(key) with
+        | true, (stamp, reports, routes) when fresh stamp -> Some(reports, routes)
+        | _ -> None
+
+    let rememberFeed (key: string) (reports: CommunityApi.ReportDto[]) (routes: CommunityApi.RouteStatDto[]) =
+        feedCache.[key] <- (DateTimeOffset.UtcNow, reports, routes)
+
+    /// Called after this app posts, comments or reacts, and by the Refresh
+    /// button. Anything held could now be out of date.
+    let dropCaches () =
+        listCache.Clear()
+        feedCache.Clear()
 
 
 /// One route's tally inside the sheet header - the row of chips that says
@@ -303,29 +380,50 @@ type CommunityReportViewModel(dto: CommunityApi.ReportDto) =
 type CommunityGameViewModel(dto: CommunityApi.GameDto) =
     inherit ViewModelBase()
 
-    let mutable cover: Bitmap option = None
-    let mutable coverTried = false
-
-    let load () =
-        if not coverTried then
-            coverTried <- true
-            cover <- CommunityShared.loadCover dto.Cover
+    let mutable cover: Bitmap option = CommunityShared.cachedCover dto.Cover
+    let mutable coverStarted = cover.IsSome
 
     member _.Id = dto.Id
     member _.Title = dto.Title
+
+    /// The row this card was built from, so a page already held can be put
+    /// back in the cache without asking the server for it again.
+    member _.Dto = dto
 
     /// Stands in for a cover Steam had nothing for.
     member _.Initial =
         if String.IsNullOrWhiteSpace(dto.Title) then "?" else dto.Title.Substring(0, 1).ToUpperInvariant()
 
-    member _.Cover =
-        load ()
+    /// Fetched off the UI thread, always.
+    ///
+    /// This used to download and decode inside the getter, which the grid calls
+    /// once per card while it is laying out - forty blocking HTTP requests on
+    /// the UI thread, which is exactly what made the section freeze on the way
+    /// in. Now the card renders immediately with its letter and swaps the
+    /// artwork in when it arrives.
+    member private this.Begin() =
+        if not coverStarted then
+            coverStarted <- true
+
+            Task.Run(fun () ->
+                let loaded = CommunityShared.loadCover dto.Cover
+
+                if loaded.IsSome then
+                    CommunityShared.ui (fun () ->
+                        cover <- loaded
+                        this.RaisePropertyChanged("Cover")
+                        this.RaisePropertyChanged("HasCover")))
+            |> ignore
+
+    member this.Cover =
+        this.Begin()
+
         match cover with
         | Some b -> b
         | None -> null
 
-    member _.HasCover =
-        load ()
+    member this.HasCover =
+        this.Begin()
         cover.IsSome
 
     member _.VerdictText = CommunityShared.statusText dto.Verdict
@@ -356,6 +454,27 @@ type CommunityViewModel() =
     let mutable resultFilter = ""
     let mutable query = ""
     let mutable totalGames = 0
+
+    /// Twenty at a time. The whole list arriving at once is what made entering
+    /// the section expensive; the rest follows as the user scrolls.
+    let pageSize = 20
+    let mutable hasMore = false
+    let mutable isLoadingMore = false
+
+    /// Where the next page starts, exactly as the server handed it back. ""
+    /// means the list is complete.
+    let mutable nextCursor = ""
+
+    /// The cursor that goes with each cached answer, so a grid restored from
+    /// memory can still carry on scrolling instead of stopping at its end.
+    let cursorByKey = Generic.Dictionary<string, string>()
+
+    /// "recent", "reports" or "title".
+    let mutable sortOrder = "recent"
+
+    /// Every id on screen. A game can only be added once, whatever the server
+    /// returns - two pages overlapping is the classic way a duplicate appears.
+    let shownIds = Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase)
 
     // ---- the sheet -------------------------------------------------------
     let mutable isSheetOpen = false
@@ -390,6 +509,8 @@ type CommunityViewModel() =
             isBusy <- true
             this.RaisePropertyChanged("IsBusy")
             this.RaisePropertyChanged("IsIdle")
+            this.RaisePropertyChanged("IsFirstLoad")
+            this.RaisePropertyChanged("ShowNothingFound")
 
             Task.Run(fun () ->
                 let outcome =
@@ -402,6 +523,8 @@ type CommunityViewModel() =
                     isBusy <- false
                     this.RaisePropertyChanged("IsBusy")
                     this.RaisePropertyChanged("IsIdle")
+                    this.RaisePropertyChanged("IsFirstLoad")
+                    this.RaisePropertyChanged("ShowNothingFound")
 
                     match outcome with
                     | Ok() -> ()
@@ -456,70 +579,213 @@ type CommunityViewModel() =
 
     member _.IsBusy = isBusy
     member _.IsIdle = not isBusy
+
+    /// An empty grid means two different things, and they must not look alike:
+    /// still fetching, or nobody has posted about anything matching.
+    member _.IsFirstLoad = isBusy && games.Count = 0
+    member _.ShowNothingFound = not isBusy && games.Count = 0
     member _.StatusMessage = statusMessage
     member _.HasStatusMessage = not (String.IsNullOrWhiteSpace(statusMessage))
 
     member _.RouteFilter = routeFilter
     member _.ResultFilter = resultFilter
-    member _.IsRouteAll = routeFilter = ""
-    member _.IsRouteOpti = routeFilter = "optiscaler"
-    member _.IsRouteReShade = routeFilter = "dx12"
-    member _.IsRouteEmulator = routeFilter = "emulator"
-    member _.IsRouteAmd = routeFilter = "amd"
-    member _.IsResultAll = resultFilter = ""
-    member _.IsResultWorking = resultFilter = "working"
-    member _.IsResultMixed = resultFilter = "mixed"
-    member _.IsResultBroken = resultFilter = "broken"
+
+    // ---------------------------------------------------------------------
+    // The toolbar. Three small dropdowns replace the two long rows of nine
+    // buttons - same choices, a third of the width, plus a sort order.
+    // ---------------------------------------------------------------------
+    member _.RouteOptions = CommunityFilters.routeLabels
+    member _.ResultOptions = CommunityFilters.resultLabels
+    member _.SortOptions = CommunityFilters.sortLabels
+
+    // The dropdowns show translated words (`Loc.CommunityRouteOptions` and
+    // friends) and bind to these indices. A language switch refills them and
+    // they report -1 for a moment - not a user choice, so it is ignored rather
+    // than read as "All" and a reload.
+    member this.SelectedRouteIndex
+        with get () = max 0 (Array.IndexOf(CommunityFilters.routeKeys, routeFilter))
+        and set (i: int) =
+            if i >= 0 then
+                let key = CommunityFilters.keyAt CommunityFilters.routeKeys i
+                if routeFilter <> key then
+                    routeFilter <- key
+                    this.RaiseFilters()
+                    this.LoadGames()
+
+    member this.SelectedResultIndex
+        with get () = max 0 (Array.IndexOf(CommunityFilters.resultKeys, resultFilter))
+        and set (i: int) =
+            if i >= 0 then
+                let key = CommunityFilters.keyAt CommunityFilters.resultKeys i
+                if resultFilter <> key then
+                    resultFilter <- key
+                    this.RaiseFilters()
+                    this.LoadGames()
+
+    member this.SelectedSortIndex
+        with get () = max 0 (Array.IndexOf(CommunityFilters.sortKeys, sortOrder))
+        and set (i: int) =
+            if i >= 0 then
+                let key = CommunityFilters.keyAt CommunityFilters.sortKeys i
+                if sortOrder <> (if key = "" then "recent" else key) then
+                    sortOrder <- (if key = "" then "recent" else key)
+                    this.RaiseFilters()
+                    this.LoadGames()
+
+    /// After a language switch the dropdowns hold new words; this tells them
+    /// again which entry is selected so none of them comes back blank.
+    member this.RelabelFilters() =
+        for name in [ "SelectedRouteIndex"; "SelectedResultIndex"; "SelectedSortIndex" ] do
+            this.RaisePropertyChanged(name)
+
+    /// What the search box is filtering by, shown as a chip with its own ✕ so
+    /// it is never unclear why the grid looks short.
+    member _.QueryText = query
+    member _.HasQuery = not (String.IsNullOrWhiteSpace(query))
+
+    member _.HasActiveFilters = routeFilter <> "" || resultFilter <> "" || sortOrder <> "recent"
 
     member private this.RaiseFilters() =
         for name in
-            [ "IsRouteAll"; "IsRouteOpti"; "IsRouteReShade"; "IsRouteEmulator"; "IsRouteAmd"
-              "IsResultAll"; "IsResultWorking"; "IsResultMixed"; "IsResultBroken" ] do
+            [ "SelectedRouteIndex"; "SelectedResultIndex"; "SelectedSortIndex"
+              "HasActiveFilters"; "QueryText"; "HasQuery" ] do
             this.RaisePropertyChanged(name)
 
-    member this.SetRouteFilter(value: string) =
-        if routeFilter <> value then
-            routeFilter <- value
+    /// Everything back to "all games, newest first". The search box is cleared
+    /// by the window, which owns it.
+    member this.ClearFilters() =
+        if routeFilter <> "" || resultFilter <> "" || sortOrder <> "recent" then
+            routeFilter <- ""
+            resultFilter <- ""
+            sortOrder <- "recent"
             this.RaiseFilters()
-            this.Refresh()
-
-    member this.SetResultFilter(value: string) =
-        if resultFilter <> value then
-            resultFilter <- value
-            this.RaiseFilters()
-            this.Refresh()
+            this.LoadGames()
 
     /// The window's one search box drives this while the section is open.
     member this.ApplyQuery(text: string) =
         let trimmed = if isNull text then "" else text.Trim()
         if query <> trimmed then
             query <- trimmed
-            if isLoaded then this.Refresh()
+            this.RaiseFilters()
+            if isLoaded then this.LoadGames()
 
-    member this.Refresh() =
+    /// The filters and the sort together identify one answer, so they are the key.
+    member private _.GridKey = String.Join("", [| query; routeFilter; resultFilter; sortOrder |])
+
+    /// Appends a page. Ids already on screen are skipped, so a game can never
+    /// be listed twice however the pages line up.
+    member private this.AddPage(list: CommunityApi.GameDto[], total: int, next: string, reset: bool) =
+        if reset then
+            games.Clear()
+            shownIds.Clear()
+
+        for g in list do
+            if not (isNull g.Id) && shownIds.Add(g.Id) then
+                games.Add(CommunityGameViewModel(g))
+
+        totalGames <- total
+
+        // The server says whether there is more: a cursor for the next page,
+        // or nothing. Counting rows here would be guessing.
+        nextCursor <- next
+        hasMore <- next <> ""
+        statusMessage <- ""
+
+        for name in
+            [ "HasGames"; "IsEmpty"; "TotalText"; "StatusMessage"; "HasStatusMessage"
+              "IsFirstLoad"; "ShowNothingFound"; "HasMore"; "IsLoadingMore" ] do
+            this.RaisePropertyChanged(name)
+
+    /// Fills the grid, from memory when the same filters were asked for in the
+    /// last few minutes. Returns true when it answered without going out, which
+    /// is what makes coming back to the section instant.
+    member private this.ServeFromCache() =
+        let key = this.GridKey
+
+        match CommunityShared.cachedList key with
+        | Some(list, total) ->
+            let next =
+                match cursorByKey.TryGetValue(key) with
+                | true, c -> c
+                | _ -> ""
+
+            ui (fun () -> this.AddPage(list, total, next, true))
+            true
+        | None -> false
+
+    member private this.Remember(key: string, list: CommunityApi.GameDto[], total: int, next: string) =
+        CommunityShared.rememberList key list total
+        cursorByKey.[key] <- next
+
+    member private this.FetchGames() =
+        let key = this.GridKey
+
         this.Run(fun () ->
-            match CommunityApi.listGames query routeFilter resultFilter with
+            match CommunityApi.listGamesPage query routeFilter resultFilter sortOrder "" pageSize with
             | Error e -> Error e
-            | Ok(list, total) ->
-                ui (fun () ->
-                    games.Clear()
-                    for g in list do
-                        games.Add(CommunityGameViewModel(g))
-
-                    totalGames <- total
-                    statusMessage <- ""
-                    this.RaisePropertyChanged("HasGames")
-                    this.RaisePropertyChanged("IsEmpty")
-                    this.RaisePropertyChanged("TotalText")
-                    this.RaisePropertyChanged("StatusMessage")
-                    this.RaisePropertyChanged("HasStatusMessage"))
-
+            | Ok(list, total, next) ->
+                this.Remember(key, list, total, next)
+                ui (fun () -> this.AddPage(list, total, next, true))
                 Ok())
 
+    /// The Refresh button. Always goes out - that is the whole point of it.
+    member this.Refresh() =
+        CommunityShared.dropCaches ()
+        cursorByKey.Clear()
+        this.FetchGames()
+
+    member this.LoadGames() =
+        if not (this.ServeFromCache()) then this.FetchGames()
+
+    member _.HasMore = hasMore
+    member _.IsLoadingMore = isLoadingMore
+
+    /// The next page, asked for when the grid is scrolled near its end.
+    ///
+    /// Deliberately not through `Run`: the spinner in the header means "the
+    /// list is being replaced", and this only adds to the bottom of it.
+    member this.LoadMore() =
+        if hasMore && not isLoadingMore && not isBusy && nextCursor <> "" then
+            isLoadingMore <- true
+            this.RaisePropertyChanged("IsLoadingMore")
+
+            let key = this.GridKey
+            let cursor = nextCursor
+
+            Task.Run(fun () ->
+                let outcome =
+                    try
+                        CommunityApi.listGamesPage query routeFilter resultFilter sortOrder cursor pageSize
+                    with ex ->
+                        Error ex.Message
+
+                ui (fun () ->
+                    isLoadingMore <- false
+
+                    match outcome with
+                    | Ok(list, total, next) ->
+                        this.AddPage(list, total, next, false)
+
+                        // Everything held so far, so coming back to the section
+                        // restores the whole scroll rather than the first page.
+                        let held = games |> Seq.map (fun g -> g.Dto) |> Seq.toArray
+                        this.Remember(key, held, total, next)
+                    | Error _ ->
+                        // A page that fails is not worth a banner: the grid
+                        // stops growing and scrolling again retries it.
+                        hasMore <- false
+                        this.RaisePropertyChanged("HasMore")
+
+                    this.RaisePropertyChanged("IsLoadingMore")))
+            |> ignore
+
     /// First entry into the section: find out who this device is, then load.
+    /// Coming back later re-enters through `LoadGames`, which normally has the
+    /// answer already.
     member this.EnsureLoaded() =
         if not isLoaded then
             isLoaded <- true
+            let key = this.GridKey
 
             this.Run(fun () ->
                 let name = CommunityApi.getMyName () |> Result.defaultValue ""
@@ -530,20 +796,14 @@ type CommunityViewModel() =
                     this.RaisePropertyChanged("IsNamed")
                     this.RaisePropertyChanged("IsAnonymous"))
 
-                match CommunityApi.listGames query routeFilter resultFilter with
+                match CommunityApi.listGamesPage query routeFilter resultFilter sortOrder "" pageSize with
                 | Error e -> Error e
-                | Ok(list, total) ->
-                    ui (fun () ->
-                        games.Clear()
-                        for g in list do
-                            games.Add(CommunityGameViewModel(g))
-
-                        totalGames <- total
-                        this.RaisePropertyChanged("HasGames")
-                        this.RaisePropertyChanged("IsEmpty")
-                        this.RaisePropertyChanged("TotalText"))
-
+                | Ok(list, total, next) ->
+                    this.Remember(key, list, total, next)
+                    ui (fun () -> this.AddPage(list, total, next, true))
                     Ok())
+        else
+            this.LoadGames()
 
     // ======================================================================
     // THE SHEET - one game's reports
@@ -581,35 +841,43 @@ type CommunityViewModel() =
             this.RaisePropertyChanged("SheetRouteFilter")
             this.LoadReports()
 
+    member private this.ShowFeed(list: CommunityApi.ReportDto[], stats: CommunityApi.RouteStatDto[]) =
+        // The chips are rebuilt only when the whole game is reloaded, never
+        // when the route filter narrows the feed - otherwise picking a route
+        // would erase the other routes.
+        if stats.Length > 0 || routeChips.Count = 0 then
+            routeChips.Clear()
+
+            for s in stats do
+                routeChips.Add(RouteChipViewModel(s))
+
+        reports.Clear()
+
+        for r in list do
+            reports.Add(CommunityReportViewModel(r))
+
+        this.RaisePropertyChanged("HasRouteChips")
+        this.RaisePropertyChanged("HasReports")
+
+    /// Opening the same game twice, or flipping a route chip back, is answered
+    /// from memory - the sheet appears filled instead of blank-then-populated.
     member this.LoadReports() =
         let id = sheetGameId
+        let key = id + "" + sheetRouteFilter
 
-        this.Run(fun () ->
-            let stats =
-                match CommunityApi.getGame id with
-                | Ok(_, r) -> r
-                | Error _ -> [||]
-
-            match CommunityApi.listReports id sheetRouteFilter with
-            | Error e -> Error e
-            | Ok list ->
-                ui (fun () ->
-                    // The chips are rebuilt only when the whole game is
-                    // reloaded, never when the route filter narrows the feed -
-                    // otherwise picking a route would erase the other routes.
-                    if stats.Length > 0 || routeChips.Count = 0 then
-                        routeChips.Clear()
-                        for s in stats do
-                            routeChips.Add(RouteChipViewModel(s))
-
-                    reports.Clear()
-                    for r in list do
-                        reports.Add(CommunityReportViewModel(r))
-
-                    this.RaisePropertyChanged("HasRouteChips")
-                    this.RaisePropertyChanged("HasReports"))
-
-                Ok())
+        match CommunityShared.cachedFeed key with
+        | Some(list, stats) -> this.ShowFeed(list, stats)
+        | None ->
+            this.Run(fun () ->
+                // One request: the Worker puts the route chips in the same
+                // answer as the reports whenever no route is picked. With a
+                // route picked no chips come back and the ones showing stay.
+                match CommunityApi.listFeed id sheetRouteFilter with
+                | Error e -> Error e
+                | Ok(list, stats) ->
+                    CommunityShared.rememberFeed key list stats
+                    ui (fun () -> this.ShowFeed(list, stats))
+                    Ok())
 
     // ======================================================================
     // COMMENTS AND REACTIONS
@@ -623,7 +891,9 @@ type CommunityViewModel() =
                 report.IsLoadingComments <- true
 
                 Task.Run(fun () ->
-                    let loaded = CommunityApi.listComments report.Id
+                    // Keyed on the reply count, so the edge copy is reused until
+                    // someone actually replies - and never served stale after.
+                    let loaded = CommunityApi.listCommentsFresh report.Id report.CommentCount
 
                     ui (fun () ->
                         report.IsLoadingComments <- false
@@ -644,7 +914,9 @@ type CommunityViewModel() =
                 match CommunityApi.postComment report.Id text with
                 | Error e -> Error e
                 | Ok() ->
-                    let refreshed = CommunityApi.listComments report.Id
+                    // What is held in memory no longer matches the server.
+                    CommunityShared.dropCaches ()
+                    let refreshed = CommunityApi.listCommentsFresh report.Id (report.CommentCount + 1)
 
                     ui (fun () ->
                         report.ReplyText <- ""
@@ -667,7 +939,9 @@ type CommunityViewModel() =
         if this.IsNamed then
             Task.Run(fun () ->
                 match CommunityApi.toggleReaction report.Id slot with
-                | Ok on -> ui (fun () -> report.ApplyReaction(slot, on))
+                | Ok on ->
+                    CommunityShared.dropCaches ()
+                    ui (fun () -> report.ApplyReaction(slot, on))
                 | Error _ -> ())
             |> ignore
 
@@ -788,23 +1062,26 @@ type CommunityViewModel() =
                 match CommunityApi.postReport draft with
                 | Error e -> Error e
                 | Ok() ->
+                    // The user's own post must never be missing from the list
+                    // they land back on, so nothing held is trusted after this.
+                    CommunityShared.dropCaches ()
+
                     ui (fun () ->
+                        // A short bright sparkle: the result is out.
+                        UiSounds.published ()
                         isComposerOpen <- false
                         this.RaisePropertyChanged("IsComposerOpen"))
 
-                    match CommunityApi.listGames query routeFilter resultFilter with
+                    // Back to the first page: the new post is the most recently
+                    // updated game, so it is the one at the top.
+                    cursorByKey.Clear()
+                    let key = this.GridKey
+
+                    match CommunityApi.listGamesPage query routeFilter resultFilter sortOrder "" pageSize with
                     | Error e -> Error e
-                    | Ok(list, total) ->
-                        ui (fun () ->
-                            games.Clear()
-                            for g in list do
-                                games.Add(CommunityGameViewModel(g))
-
-                            totalGames <- total
-                            this.RaisePropertyChanged("HasGames")
-                            this.RaisePropertyChanged("IsEmpty")
-                            this.RaisePropertyChanged("TotalText"))
-
+                    | Ok(list, total, next) ->
+                        this.Remember(key, list, total, next)
+                        ui (fun () -> this.AddPage(list, total, next, true))
                         Ok())
 
     member _.TutorialsUrl = CommunityApi.TutorialsUrl

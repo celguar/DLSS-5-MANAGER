@@ -171,6 +171,34 @@ module Localization =
         member _.BtnJoinCommunity = get "btn_join_community"
         member _.BtnRefresh = get "btn_refresh"
         member _.BtnCommunityGuides = get "btn_community_guides"
+        member _.CommunityLoading = get "community_loading"
+        member _.CommunityLoadingMore = get "community_loading_more"
+
+        // ---- PULSE (chat) and the community toolbar ----------------------
+        member _.PulseTitle = get "pulse_title"
+        member _.PulseTagline = get "pulse_tagline"
+        member _.PulsePlaceholder = get "pulse_placeholder"
+        member _.PulseEmpty = get "pulse_empty"
+        member _.PulseLoadingOlder = get "pulse_loading_older"
+        member _.PulseImageExpired = get "pulse_image_expired"
+        member _.PulseRules = get "pulse_rules"
+        member _.PulseJoinFirst = get "pulse_join_first"
+        member _.ChatReply = get "chat_reply"
+        member _.ChatReplyingTo = get "chat_replying_to"
+        member _.ChatSending = get "chat_sending"
+        member _.ChatPhoto = get "chat_photo"
+        member _.ChatSaveImage = get "chat_save_image"
+        member _.ChatClose = get "chat_close"
+        member _.ChatReact = get "chat_react"
+        member _.BtnSend = get "btn_send"
+        member _.BtnAttachImage = get "btn_attach_image"
+        member _.BtnDelete = get "btn_delete"
+        member _.CommunityTabGames = get "community_tab_games"
+        member _.FilterRoute = get "filter_route"
+        member _.FilterResult = get "filter_result"
+        member _.FilterSort = get "filter_sort"
+        member _.FilterClear = get "filter_clear"
+        member _.SearchingFor = get "searching_for"
         member _.CommunityEmptyTitle = get "community_empty_title"
         member _.CommunityEmptyHint = get "community_empty_hint"
         member _.CommunityShare = get "community_share"
@@ -231,6 +259,31 @@ module Localization =
                get "theme_stardust_particles"
                get "theme_cyber_flux"
                get "theme_minimal_clean" |]
+
+        /// Same order as `ModInstaller.overlayThemes`. The English name is what
+        /// is saved and what the in-game add-on reads; this is only what the
+        /// style picker shows.
+        member _.OverlayThemeNames =
+            [| get "overlay_theme_neon_emerald"
+               get "overlay_theme_cyber_cyan"
+               get "overlay_theme_electric_violet"
+               get "overlay_theme_supernova_amber"
+               get "overlay_theme_eclipse_crimson"
+               get "overlay_theme_graphite_minimal" |]
+
+        // ---- Community toolbar dropdowns ----------------------------------
+        /// Same order as `CommunityFilters.routeKeys`. OptiScaler, ReShade and
+        /// AMD are names and read the same in every language.
+        member _.CommunityRouteOptions =
+            [| get "filter_route_all"; "OptiScaler"; "ReShade"; get "route_emulator"; "AMD" |]
+
+        /// Same order as `CommunityFilters.resultKeys`.
+        member _.CommunityResultOptions =
+            [| get "filter_result_any"; get "result_working"; get "result_mixed"; get "result_broken" |]
+
+        /// Same order as `CommunityFilters.sortKeys`.
+        member _.CommunitySortOptions =
+            [| get "sort_recent"; get "sort_reports"; get "sort_title" |]
 
         // ---- Counters ------------------------------------------------------
         /// "TOTAL GAMES: {count}" with the placeholder filled in.

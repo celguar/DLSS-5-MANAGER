@@ -484,8 +484,8 @@
                                                         <TextBlock Grid.Column="0" Text="{Binding Loc.OverlayStyle}" FontSize="11.5" FontWeight="SemiBold"
                                                                    Foreground="#94A3B8" VerticalAlignment="Center" />
                                                         <ComboBox Grid.Column="1" Classes="GlassComboBox"
-                                                                  ItemsSource="{Binding OverlayThemes}"
-                                                                  SelectedItem="{Binding SelectedOverlayTheme, Mode=TwoWay}"
+                                                                  ItemsSource="{Binding Loc.OverlayThemeNames}"
+                                                                  SelectedIndex="{Binding SelectedOverlayThemeIndex, Mode=TwoWay}"
                                                                   HorizontalAlignment="Stretch" Height="34" VerticalAlignment="Center" />
                                                     </Grid>
                                                     <Grid Grid.Column="1" ColumnDefinitions="Auto,*" ColumnSpacing="8">
@@ -742,31 +742,14 @@
                                                 </Grid>
                                             </Border>
 
-                                            <!-- OptiScaler: a folder, so no switch - nothing installs without it -->
+                                            <!-- OptiScaler: a folder, so no switch - nothing installs
+                                                 without it. There used to be two of these; the plain
+                                                 build was dropped in 1.2.1 and the neural upstream one
+                                                 is now what every OptiScaler install uses. -->
                                             <Border Background="#0AFFFFFF" BorderBrush="#18FFFFFF" BorderThickness="1" CornerRadius="14" Padding="14,10">
                                                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
                                                     <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
                                                         <TextBlock Text="OptiScaler" FontSize="13" FontWeight="SemiBold" Foreground="#FFFFFF" />
-                                                        <TextBlock Text="{Binding OptiScalerState}" FontSize="11" Foreground="#94A3B8" />
-                                                    </StackPanel>
-                                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                                                        <Button Classes="EmptyActionBtn" Click="OnReplaceOptiScalerClicked" Cursor="Hand" Padding="14,7"
-                                                                ToolTip.Tip="Pick the folder OptiScaler was extracted into - it must contain OptiScaler.dll">
-                                                            <TextBlock Text="{Binding Loc.Replace}" FontSize="11" FontWeight="Bold" Foreground="#FFFFFF" />
-                                                        </Button>
-                                                        <Button Classes="EmptyActionBtn" Click="OnRestoreOptiScalerClicked" Cursor="Hand" Padding="14,7">
-                                                            <TextBlock Text="{Binding Loc.Restore}" FontSize="11" FontWeight="Bold" Foreground="#CBD5E1" />
-                                                        </Button>
-                                                    </StackPanel>
-                                                </Grid>
-                                            </Border>
-
-                                            <!-- The neural upstream build of OptiScaler, swapped the
-                                                 same way and just as unswitchable -->
-                                            <Border Background="#0AFFFFFF" BorderBrush="#18FFFFFF" BorderThickness="1" CornerRadius="14" Padding="14,10">
-                                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                                                    <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
-                                                        <TextBlock Text="OptiScaler neural-upstream" FontSize="13" FontWeight="SemiBold" Foreground="#FFFFFF" />
                                                         <TextBlock Text="{Binding OptiScalerNeuralState}" FontSize="11" Foreground="#94A3B8" />
                                                     </StackPanel>
                                                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
@@ -875,11 +858,12 @@
                                                                             <StackPanel Orientation="Horizontal" Spacing="2">
                                                                                 <Button Classes="SegmentedTab" Classes.Active="{Binding IsOptiDx12Mode}" Click="OnToggleExtraModeClicked"
                                                                                         Tag="optiscaler-dx12" Padding="11,5" Content="OPTI" Cursor="Hand" FontSize="10.5" />
+                                                                                <!-- There is no third OptiScaler variant to aim at
+                                                                                     since 1.2.1, so "optiscaler-neural" can no longer
+                                                                                     be produced at install time and the chip that set
+                                                                                     it is gone with it. -->
                                                                                 <Button Classes="SegmentedTab" Classes.Active="{Binding IsOptiVulkanMode}" Click="OnToggleExtraModeClicked"
                                                                                         Tag="optiscaler-vulkan" Padding="11,5" Content="VK" Cursor="Hand" FontSize="10.5" />
-                                                                                <Button Classes="SegmentedTab" Classes.Active="{Binding IsOptiNeuralMode}" Click="OnToggleExtraModeClicked"
-                                                                                        Tag="optiscaler-neural" Padding="11,5" Content="NU" Cursor="Hand" FontSize="10.5"
-                                                                                        ToolTip.Tip="OptiScaler neural-upstream" />
                                                                             </StackPanel>
                                                                         </Border>
 
@@ -1487,19 +1471,52 @@
                                 <Border Grid.Row="0" Background="#10FFFFFF" BorderBrush="#20FFFFFF" BorderThickness="1"
                                         CornerRadius="18" Padding="18,12" Margin="0,8,0,12">
                                     <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="14">
-                                        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                                        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
                                             <TextBlock Text="{Binding Loc.CommunitySection}" FontSize="13.5" FontWeight="Bold"
                                                        Foreground="#FFFFFF" LetterSpacing="0.5" VerticalAlignment="Center" />
-                                            <Border Background="#26F59E0B" BorderBrush="#55F59E0B" BorderThickness="1"
-                                                    CornerRadius="6" Padding="6,1" VerticalAlignment="Center">
-                                                <TextBlock Text="{Binding Loc.Beta}" FontSize="8.5" FontWeight="Bold"
-                                                           Foreground="#FCD34D" LetterSpacing="0.6" />
+
+                                            <!-- The two halves of the section. PULSE gets a live dot so it
+                                                 reads as the place where things are happening right now. -->
+                                            <Border CornerRadius="12" Padding="3" Background="#0C1014" BorderBrush="#20FFFFFF"
+                                                    BorderThickness="1" VerticalAlignment="Center" IsVisible="{Binding Community.IsNamed}">
+                                                <StackPanel Orientation="Horizontal" Spacing="2">
+                                                    <Button Classes="SegmentedTab" Classes.Active="{Binding IsCommunityGamesOpen}"
+                                                            Click="OnCommunityGamesTabClicked" Padding="14,5"
+                                                            Content="{Binding Loc.CommunityTabGames}" />
+                                                    <Button Classes="SegmentedTab" Classes.Active="{Binding IsPulseOpen}"
+                                                            Click="OnPulseTabClicked" Padding="14,5" ToolTip.Tip="{Binding Loc.PulseTagline}">
+                                                        <StackPanel Orientation="Horizontal" Spacing="7">
+                                                            <Ellipse Width="7" Height="7" Fill="#00FF88" VerticalAlignment="Center">
+                                                                <Ellipse.Styles>
+                                                                    <Style Selector="Ellipse">
+                                                                        <Style.Animations>
+                                                                            <Animation Duration="0:0:1.6" IterationCount="Infinite">
+                                                                                <KeyFrame Cue="0%"><Setter Property="Opacity" Value="1" /></KeyFrame>
+                                                                                <KeyFrame Cue="50%"><Setter Property="Opacity" Value="0.25" /></KeyFrame>
+                                                                                <KeyFrame Cue="100%"><Setter Property="Opacity" Value="1" /></KeyFrame>
+                                                                            </Animation>
+                                                                        </Style.Animations>
+                                                                    </Style>
+                                                                </Ellipse.Styles>
+                                                            </Ellipse>
+                                                            <TextBlock Text="{Binding Loc.PulseTitle}" FontWeight="Bold" LetterSpacing="0.8"
+                                                                       VerticalAlignment="Center" />
+                                                            <!-- Replies to your messages you have not looked at yet -->
+                                                            <Border IsVisible="{Binding Pulse.HasUnreadReplies}" Background="#00FF88"
+                                                                    CornerRadius="8" Padding="5,0" MinWidth="16" VerticalAlignment="Center">
+                                                                <TextBlock Text="{Binding Pulse.UnreadRepliesText}" FontSize="9.5" FontWeight="Bold"
+                                                                           Foreground="#04130B" HorizontalAlignment="Center" />
+                                                            </Border>
+                                                        </StackPanel>
+                                                    </Button>
+                                                </StackPanel>
                                             </Border>
                                         </StackPanel>
 
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                             <Border Background="#10FFFFFF" BorderBrush="#1FFFFFFF" BorderThickness="1"
-                                                    CornerRadius="9" Padding="10,4" VerticalAlignment="Center">
+                                                    CornerRadius="9" Padding="10,4" VerticalAlignment="Center"
+                                                    IsVisible="{Binding IsCommunityGamesOpen}">
                                                 <TextBlock Text="{Binding Community.TotalText}" FontSize="10.5" FontWeight="Bold" Foreground="#CBD5E1" />
                                             </Border>
 
@@ -1521,6 +1538,34 @@
                                                 </StackPanel>
                                             </Button>
 
+                                            <!-- Something is on the wire. Without this the section
+                                                 just sits there and reads as frozen. -->
+                                            <Border Classes="ManageBusyRing" IsVisible="{Binding Community.IsBusy}"
+                                                    Width="26" Height="26" CornerRadius="13" VerticalAlignment="Center"
+                                                    Background="#12FFFFFF" BorderBrush="#1FFFFFFF" BorderThickness="1"
+                                                    IsHitTestVisible="False" ToolTip.Tip="Loading">
+                                                <Ellipse Width="14" Height="14" StrokeThickness="2"
+                                                         StrokeDashArray="2.6,1.6" StrokeLineCap="Round"
+                                                         Stroke="{Binding MotifAccentBrush}"
+                                                         HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                         RenderTransformOrigin="50%,50%">
+                                                    <Ellipse.Styles>
+                                                        <Style Selector="Ellipse">
+                                                            <Style.Animations>
+                                                                <Animation Duration="0:0:1.1" IterationCount="Infinite">
+                                                                    <KeyFrame Cue="0%">
+                                                                        <Setter Property="RotateTransform.Angle" Value="0" />
+                                                                    </KeyFrame>
+                                                                    <KeyFrame Cue="100%">
+                                                                        <Setter Property="RotateTransform.Angle" Value="360" />
+                                                                    </KeyFrame>
+                                                                </Animation>
+                                                            </Style.Animations>
+                                                        </Style>
+                                                    </Ellipse.Styles>
+                                                </Ellipse>
+                                            </Border>
+
                                             <Button Classes="EmptyActionBtn" Click="OnCommunityRefreshClicked" Cursor="Hand" Padding="14,7"
                                                     IsEnabled="{Binding Community.IsIdle}">
                                                 <TextBlock Text="{Binding Loc.BtnRefresh}" FontSize="11" FontWeight="Bold" Foreground="#FFFFFF" />
@@ -1529,31 +1574,477 @@
                                     </Grid>
                                 </Border>
 
-                                <!-- Filters: which install route, and how it went -->
-                                <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="12" Margin="0,0,0,14"
-                                            HorizontalAlignment="Center"
-                                            IsVisible="{Binding Community.IsNamed}">
-                                    <Border CornerRadius="13" Padding="3" Background="#0C1014"
-                                            BorderBrush="#20FFFFFF" BorderThickness="1" VerticalAlignment="Center">
-                                        <StackPanel Orientation="Horizontal" Spacing="2">
-                                            <Button Classes="SegmentedTab" Classes.Active="{Binding Community.IsRouteAll}" Click="OnCommunityRouteClicked" Tag="" Content="ALL ROUTES" />
-                                            <Button Classes="SegmentedTab" Classes.Active="{Binding Community.IsRouteOpti}" Click="OnCommunityRouteClicked" Tag="optiscaler" Content="OPTISCALER" />
-                                            <Button Classes="SegmentedTab" Classes.Active="{Binding Community.IsRouteReShade}" Click="OnCommunityRouteClicked" Tag="dx12" Content="RESHADE" />
-                                            <Button Classes="SegmentedTab" Classes.Active="{Binding Community.IsRouteEmulator}" Click="OnCommunityRouteClicked" Tag="emulator" Content="EMULATOR" />
-                                            <Button Classes="SegmentedTab" Classes.Active="{Binding Community.IsRouteAmd}" Click="OnCommunityRouteClicked" Tag="amd" Content="AMD" />
+                                <!-- The toolbar: route, result and order as three compact dropdowns,
+                                     and a chip for whatever the search box is filtering by. It took
+                                     the place of two rows of nine buttons that filled the width. -->
+                                <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="14" Margin="0,0,0,14"
+                                            HorizontalAlignment="Center">
+                                    <StackPanel.IsVisible>
+                                        <MultiBinding Converter="{x:Static BoolConverters.And}">
+                                            <Binding Path="Community.IsNamed" />
+                                            <Binding Path="IsCommunityGamesOpen" />
+                                        </MultiBinding>
+                                    </StackPanel.IsVisible>
+
+                                    <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding Loc.FilterRoute}" FontSize="10.5" FontWeight="Bold"
+                                                   Foreground="#7C8595" VerticalAlignment="Center" />
+                                        <ComboBox Classes="GlassComboBox" ItemsSource="{Binding Loc.CommunityRouteOptions}"
+                                                  SelectedIndex="{Binding Community.SelectedRouteIndex, Mode=TwoWay}"
+                                                  Width="150" Height="34" VerticalAlignment="Center" />
+                                    </StackPanel>
+
+                                    <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding Loc.FilterResult}" FontSize="10.5" FontWeight="Bold"
+                                                   Foreground="#7C8595" VerticalAlignment="Center" />
+                                        <ComboBox Classes="GlassComboBox" ItemsSource="{Binding Loc.CommunityResultOptions}"
+                                                  SelectedIndex="{Binding Community.SelectedResultIndex, Mode=TwoWay}"
+                                                  Width="140" Height="34" VerticalAlignment="Center" />
+                                    </StackPanel>
+
+                                    <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding Loc.FilterSort}" FontSize="10.5" FontWeight="Bold"
+                                                   Foreground="#7C8595" VerticalAlignment="Center" />
+                                        <ComboBox Classes="GlassComboBox" ItemsSource="{Binding Loc.CommunitySortOptions}"
+                                                  SelectedIndex="{Binding Community.SelectedSortIndex, Mode=TwoWay}"
+                                                  Width="150" Height="34" VerticalAlignment="Center" />
+                                    </StackPanel>
+
+                                    <!-- What the search box is filtering by, with its own way out -->
+                                    <Border IsVisible="{Binding Community.HasQuery}" Background="#1A00FF88" BorderBrush="#3300FF88"
+                                            BorderThickness="1" CornerRadius="10" Padding="11,4,5,4" VerticalAlignment="Center">
+                                        <StackPanel Orientation="Horizontal" Spacing="7">
+                                            <TextBlock Text="{Binding Loc.SearchingFor}" FontSize="10.5" Foreground="#94A3B8" VerticalAlignment="Center" />
+                                            <TextBlock Text="{Binding Community.QueryText}" FontSize="10.5" FontWeight="Bold"
+                                                       Foreground="#7CFFC4" VerticalAlignment="Center" MaxWidth="160" TextTrimming="CharacterEllipsis" />
+                                            <Button Classes="RouteChip" Click="OnClearCommunitySearchClicked" Cursor="Hand" Padding="4">
+                                                <PathIcon Data="M 19,6.41 L 17.59,5 L 12,10.59 L 6.41,5 L 5,6.41 L 10.59,12 L 5,17.59 L 6.41,19 L 12,13.41 L 17.59,19 L 19,17.59 L 13.41,12 Z"
+                                                          Width="8" Height="8" Foreground="#7CFFC4" />
+                                            </Button>
                                         </StackPanel>
                                     </Border>
 
-                                    <Border CornerRadius="13" Padding="3" Background="#0C1014"
-                                            BorderBrush="#20FFFFFF" BorderThickness="1" VerticalAlignment="Center">
-                                        <StackPanel Orientation="Horizontal" Spacing="2">
-                                            <Button Classes="SegmentedTab" Classes.Active="{Binding Community.IsResultAll}" Click="OnCommunityResultClicked" Tag="" Content="ANY RESULT" />
-                                            <Button Classes="SegmentedTab" Classes.Active="{Binding Community.IsResultWorking}" Click="OnCommunityResultClicked" Tag="working" Content="WORKING" />
-                                            <Button Classes="SegmentedTab" Classes.Active="{Binding Community.IsResultMixed}" Click="OnCommunityResultClicked" Tag="mixed" Content="MIXED" />
-                                            <Button Classes="SegmentedTab" Classes.Active="{Binding Community.IsResultBroken}" Click="OnCommunityResultClicked" Tag="broken" Content="NOT WORKING" />
-                                        </StackPanel>
-                                    </Border>
+                                    <Button Classes="EmptyActionBtn" Click="OnCommunityClearFiltersClicked" Cursor="Hand" Padding="12,6"
+                                            IsVisible="{Binding Community.HasActiveFilters}" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding Loc.FilterClear}" FontSize="10.5" FontWeight="Bold" Foreground="#CBD5E1" />
+                                    </Button>
                                 </StackPanel>
+
+                                <!-- CHAT (PULSE in the code). Laid over the games half of the section while
+                                     it is open; the grid behind is hidden, not rebuilt, so switching back
+                                     is instant. -->
+                                <Grid Grid.Row="1" Grid.RowSpan="2" RowDefinitions="*,Auto" ZIndex="5" Margin="0,0,0,14"
+                                      IsVisible="{Binding IsPulseOpen}">
+                                    <Grid.Styles>
+                                        <!-- The hover bar on a message: react, reply, delete -->
+                                        <Style Selector="Grid.ChatRow Border.ChatActions">
+                                            <Setter Property="Opacity" Value="0" />
+                                            <Setter Property="IsHitTestVisible" Value="False" />
+                                            <Setter Property="Transitions">
+                                                <Transitions>
+                                                    <DoubleTransition Property="Opacity" Duration="0:0:0.12" />
+                                                </Transitions>
+                                            </Setter>
+                                        </Style>
+                                        <Style Selector="Grid.ChatRow:pointerover Border.ChatActions">
+                                            <Setter Property="Opacity" Value="1" />
+                                            <Setter Property="IsHitTestVisible" Value="True" />
+                                        </Style>
+                                        <!-- Sent, not yet confirmed -->
+                                        <Style Selector="Grid.ChatRow.Pending">
+                                            <Setter Property="Opacity" Value="0.6" />
+                                        </Style>
+
+                                        <!-- Small flat icon buttons -->
+                                        <Style Selector="Button.ChatIcon">
+                                            <Setter Property="Background" Value="Transparent" />
+                                            <Setter Property="BorderThickness" Value="0" />
+                                            <Setter Property="CornerRadius" Value="8" />
+                                            <Setter Property="Padding" Value="5" />
+                                            <Setter Property="MinWidth" Value="0" />
+                                            <Setter Property="MinHeight" Value="0" />
+                                            <Setter Property="Cursor" Value="Hand" />
+                                        </Style>
+                                        <Style Selector="Button.ChatIcon:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+                                            <Setter Property="Background" Value="#1FFFFFFF" />
+                                        </Style>
+                                        <Style Selector="Button.ChatIcon:pressed /template/ ContentPresenter#PART_ContentPresenter">
+                                            <Setter Property="Background" Value="#2EFFFFFF" />
+                                        </Style>
+
+                                        <!-- The composer's round buttons -->
+                                        <Style Selector="Button.ChatRound">
+                                            <Setter Property="Width" Value="38" />
+                                            <Setter Property="Height" Value="38" />
+                                            <Setter Property="CornerRadius" Value="19" />
+                                            <Setter Property="Padding" Value="0" />
+                                            <Setter Property="Background" Value="#10FFFFFF" />
+                                            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+                                            <Setter Property="BorderThickness" Value="1" />
+                                            <Setter Property="HorizontalContentAlignment" Value="Center" />
+                                            <Setter Property="VerticalContentAlignment" Value="Center" />
+                                            <Setter Property="Cursor" Value="Hand" />
+                                        </Style>
+                                        <Style Selector="Button.ChatRound:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+                                            <Setter Property="Background" Value="#22FFFFFF" />
+                                            <Setter Property="BorderBrush" Value="#40FFFFFF" />
+                                        </Style>
+                                        <Style Selector="Button.ChatRound PathIcon">
+                                            <Setter Property="Foreground" Value="#CBD5E1" />
+                                        </Style>
+                                        <Style Selector="Button.ChatSend">
+                                            <Setter Property="Background" Value="#00E07A" />
+                                            <Setter Property="BorderBrush" Value="#00FF88" />
+                                        </Style>
+                                        <Style Selector="Button.ChatSend:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+                                            <Setter Property="Background" Value="#00FF88" />
+                                            <Setter Property="BorderBrush" Value="#7CFFC4" />
+                                        </Style>
+                                        <Style Selector="Button.ChatSend:disabled /template/ ContentPresenter#PART_ContentPresenter">
+                                            <Setter Property="Background" Value="#12FFFFFF" />
+                                            <Setter Property="BorderBrush" Value="#12FFFFFF" />
+                                        </Style>
+                                        <Style Selector="Button.ChatSend PathIcon">
+                                            <Setter Property="Foreground" Value="#04130B" />
+                                        </Style>
+                                        <Style Selector="Button.ChatSend:disabled PathIcon">
+                                            <Setter Property="Foreground" Value="#475569" />
+                                        </Style>
+
+                                        <!-- The message box has no box of its own: the rounded composer is the box -->
+                                        <Style Selector="TextBox.ChatInput">
+                                            <Setter Property="Background" Value="Transparent" />
+                                            <Setter Property="BorderThickness" Value="0" />
+                                            <Setter Property="Foreground" Value="#F1F5F9" />
+                                            <Setter Property="CaretBrush" Value="#00FF88" />
+                                            <Setter Property="SelectionBrush" Value="#5500FF88" />
+                                            <Setter Property="Padding" Value="4,9" />
+                                            <Setter Property="MinHeight" Value="38" />
+                                            <Setter Property="VerticalContentAlignment" Value="Center" />
+                                            <Setter Property="FontSize" Value="13" />
+                                        </Style>
+                                        <Style Selector="TextBox.ChatInput /template/ Border#PART_BorderElement">
+                                            <Setter Property="Background" Value="Transparent" />
+                                            <Setter Property="BorderThickness" Value="0" />
+                                        </Style>
+                                        <Style Selector="TextBox.ChatInput:pointerover /template/ Border#PART_BorderElement">
+                                            <Setter Property="Background" Value="Transparent" />
+                                            <Setter Property="BorderThickness" Value="0" />
+                                        </Style>
+                                        <Style Selector="TextBox.ChatInput:focus /template/ Border#PART_BorderElement">
+                                            <Setter Property="Background" Value="Transparent" />
+                                            <Setter Property="BorderThickness" Value="0" />
+                                        </Style>
+                                        <Style Selector="Border.ChatComposer:focus-within">
+                                            <Setter Property="BorderBrush" Value="#5500FF88" />
+                                        </Style>
+
+                                        <!-- Reaction chips under a message -->
+                                        <Style Selector="Button.ReactChip">
+                                            <Setter Property="Padding" Value="7,2" />
+                                            <Setter Property="CornerRadius" Value="10" />
+                                            <Setter Property="Background" Value="#10FFFFFF" />
+                                            <Setter Property="BorderBrush" Value="#1CFFFFFF" />
+                                            <Setter Property="BorderThickness" Value="1" />
+                                            <Setter Property="MinHeight" Value="0" />
+                                            <Setter Property="Cursor" Value="Hand" />
+                                        </Style>
+                                        <Style Selector="Button.ReactChip.Mine">
+                                            <Setter Property="Background" Value="#2200FF88" />
+                                            <Setter Property="BorderBrush" Value="#6600FF88" />
+                                        </Style>
+                                        <Style Selector="Button.ReactChip:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+                                            <Setter Property="Background" Value="#22FFFFFF" />
+                                        </Style>
+                                    </Grid.Styles>
+
+                                    <Border Grid.Row="0" Background="#08FFFFFF" BorderBrush="#18FFFFFF" BorderThickness="1"
+                                            CornerRadius="18" Padding="6">
+                                        <Panel>
+                                            <!-- No Padding on the ScrollViewer itself: it is not counted in the
+                                                 scrollable height, which cut the last message off at the bottom.
+                                                 The space lives on the content instead. -->
+                                            <ScrollViewer x:Name="PulseScrollViewer" ScrollChanged="OnPulseScrolled"
+                                                          HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto"
+                                                          Padding="0">
+                                                <StackPanel Spacing="2" Margin="12,8,12,16">
+                                                    <TextBlock Text="{Binding Loc.PulseLoadingOlder}" IsVisible="{Binding Pulse.IsLoadingOlder}"
+                                                               FontSize="10.5" Foreground="#64748B" HorizontalAlignment="Center" Margin="0,4,0,8" />
+
+                                                    <ItemsControl x:Name="PulseMessagesList" ItemsSource="{Binding Pulse.Messages}">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate x:DataType="vm:PulseMessageViewModel">
+                                                                <Grid Classes="ChatRow" Classes.Pending="{Binding IsPending}" Background="Transparent"
+                                                                      ColumnDefinitions="Auto,*" ColumnSpacing="11" Margin="0,5">
+                                                                    <Border Grid.Column="0" Width="32" Height="32" CornerRadius="10" VerticalAlignment="Top"
+                                                                            Background="#12FFFFFF" BorderBrush="#20FFFFFF" BorderThickness="1">
+                                                                        <TextBlock Text="{Binding Initial}" FontSize="13" FontWeight="Bold" Foreground="#94A3B8"
+                                                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                                    </Border>
+
+                                                                    <StackPanel Grid.Column="1" Spacing="5">
+                                                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                                                            <TextBlock Text="{Binding Author}" FontSize="12.5" FontWeight="Bold" Foreground="#FFFFFF"
+                                                                                       VerticalAlignment="Center" />
+                                                                            <Border Background="#1A00FF88" BorderBrush="#4400FF88" BorderThickness="1" CornerRadius="5"
+                                                                                    Padding="5,0.5" VerticalAlignment="Center" IsVisible="{Binding IsVerified}"
+                                                                                    ToolTip.Tip="Verified developer">
+                                                                                <TextBlock Text="DEV" FontSize="8" FontWeight="Bold" Foreground="#7CFFC4" LetterSpacing="0.5" />
+                                                                            </Border>
+                                                                            <TextBlock Text="{Binding Ago}" IsVisible="{Binding IsSent}" FontSize="10"
+                                                                                       Foreground="#64748B" VerticalAlignment="Center" />
+                                                                            <TextBlock Text="{Binding $parent[Window].DataContext.Loc.ChatSending}" IsVisible="{Binding IsPending}"
+                                                                                       FontSize="10" Foreground="#7CFFC4" VerticalAlignment="Center" />
+                                                                        </StackPanel>
+
+                                                                        <!-- What this answers. Takes you there when it is loaded. -->
+                                                                        <Button Classes="ChatIcon" Padding="0" CornerRadius="8" HorizontalAlignment="Left"
+                                                                                IsVisible="{Binding HasReply}" Click="OnChatReplyQuoteClicked">
+                                                                            <Border CornerRadius="8" Background="#0AFFFFFF" MaxWidth="560" ClipToBounds="True">
+                                                                                <Grid ColumnDefinitions="3,*">
+                                                                                    <Border Grid.Column="0" Background="#00FF88" />
+                                                                                    <StackPanel Grid.Column="1" Margin="9,5,12,5" Spacing="1">
+                                                                                        <TextBlock Text="{Binding ReplyAuthor}" FontSize="10.5" FontWeight="Bold" Foreground="#7CFFC4" />
+                                                                                        <TextBlock Text="{Binding ReplyBody}" FontSize="11" Foreground="#94A3B8"
+                                                                                                   TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" />
+                                                                                    </StackPanel>
+                                                                                </Grid>
+                                                                            </Border>
+                                                                        </Button>
+
+                                                                        <!-- Plain, selectable text. Nothing in the chat is ever a
+                                                                             clickable link - a URL can be copied, not followed. -->
+                                                                        <Border HorizontalAlignment="Left" CornerRadius="12"
+                                                                                Padding="11,7" Background="#1A00FF88" BorderBrush="#2A00FF88" BorderThickness="1">
+                                                                            <Border.IsVisible>
+                                                                                <MultiBinding Converter="{x:Static BoolConverters.And}">
+                                                                                    <Binding Path="HasBody" />
+                                                                                    <Binding Path="IsMine" />
+                                                                                </MultiBinding>
+                                                                            </Border.IsVisible>
+                                                                            <SelectableTextBlock Text="{Binding Body}" FontSize="12.5" Foreground="#F1F5F9"
+                                                                                                 TextWrapping="Wrap" MaxWidth="560" LineHeight="18" />
+                                                                        </Border>
+                                                                        <Border HorizontalAlignment="Left" CornerRadius="12" Padding="11,7"
+                                                                                Background="#10FFFFFF" BorderBrush="#1CFFFFFF" BorderThickness="1">
+                                                                            <Border.IsVisible>
+                                                                                <MultiBinding Converter="{x:Static BoolConverters.And}">
+                                                                                    <Binding Path="HasBody" />
+                                                                                    <Binding Path="IsTheirs" />
+                                                                                </MultiBinding>
+                                                                            </Border.IsVisible>
+                                                                            <SelectableTextBlock Text="{Binding Body}" FontSize="12.5" Foreground="#E2E8F0"
+                                                                                                 TextWrapping="Wrap" MaxWidth="560" LineHeight="18" />
+                                                                        </Border>
+
+                                                                        <!-- The picture, in a box sized before it arrives so the
+                                                                             conversation does not jump when it does. A click opens it
+                                                                             full size, with Save. -->
+                                                                        <Button Classes="ChatIcon" Padding="0" CornerRadius="12" HorizontalAlignment="Left"
+                                                                                IsVisible="{Binding HasImage}" Click="OnChatImageClicked" Cursor="Hand">
+                                                                            <Border CornerRadius="12" ClipToBounds="True" Background="#0A0F0D"
+                                                                                    BorderBrush="#1CFFFFFF" BorderThickness="1"
+                                                                                    Width="{Binding ImageWidth}" Height="{Binding ImageHeight}"
+                                                                                    EffectiveViewportChanged="OnChatImageViewportChanged">
+                                                                                <Panel>
+                                                                                    <Image Source="{Binding Image}" Stretch="UniformToFill"
+                                                                                           RenderOptions.BitmapInterpolationMode="HighQuality" />
+                                                                                    <TextBlock Text="..." IsVisible="{Binding ImageLoading}" FontSize="14"
+                                                                                               Foreground="#64748B" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                                                    <TextBlock Text="{Binding $parent[Window].DataContext.Loc.PulseImageExpired}"
+                                                                                               IsVisible="{Binding ImageFailed}" FontSize="10.5" Foreground="#64748B"
+                                                                                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                                                </Panel>
+                                                                            </Border>
+                                                                        </Button>
+
+                                                                        <!-- Reactions. Yours are the green ones; a tap takes it back. -->
+                                                                        <ItemsControl ItemsSource="{Binding Reactions}" IsVisible="{Binding HasReactions}">
+                                                                            <ItemsControl.ItemsPanel>
+                                                                                <ItemsPanelTemplate>
+                                                                                    <WrapPanel />
+                                                                                </ItemsPanelTemplate>
+                                                                            </ItemsControl.ItemsPanel>
+                                                                            <ItemsControl.ItemTemplate>
+                                                                                <DataTemplate x:DataType="vm:ChatReactionViewModel">
+                                                                                    <Button Classes="ReactChip" Classes.Mine="{Binding IsMine}"
+                                                                                            Click="OnChatReactionClicked" Margin="0,0,5,2">
+                                                                                        <StackPanel Orientation="Horizontal" Spacing="4">
+                                                                                            <TextBlock Text="{Binding Emoji}" FontSize="12" VerticalAlignment="Center" />
+                                                                                            <TextBlock Text="{Binding CountText}" FontSize="10.5" FontWeight="Bold"
+                                                                                                       Foreground="#CBD5E1" VerticalAlignment="Center" />
+                                                                                        </StackPanel>
+                                                                                    </Button>
+                                                                                </DataTemplate>
+                                                                            </ItemsControl.ItemTemplate>
+                                                                        </ItemsControl>
+                                                                    </StackPanel>
+
+                                                                    <!-- The hover bar: six reactions, reply, delete -->
+                                                                    <Border Grid.Column="1" Classes="ChatActions" IsVisible="{Binding IsSent}"
+                                                                            HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-4,0,0"
+                                                                            Background="#F2151B19" BorderBrush="#26FFFFFF" BorderThickness="1"
+                                                                            CornerRadius="11" Padding="3">
+                                                                        <StackPanel Orientation="Horizontal" Spacing="1">
+                                                                            <ItemsControl ItemsSource="{Binding QuickReactions}">
+                                                                                <ItemsControl.ItemsPanel>
+                                                                                    <ItemsPanelTemplate>
+                                                                                        <StackPanel Orientation="Horizontal" Spacing="1" />
+                                                                                    </ItemsPanelTemplate>
+                                                                                </ItemsControl.ItemsPanel>
+                                                                                <ItemsControl.ItemTemplate>
+                                                                                    <DataTemplate x:DataType="vm:ChatReactionViewModel">
+                                                                                        <Button Classes="ChatIcon" Click="OnChatReactionClicked" Padding="5,2">
+                                                                                            <TextBlock Text="{Binding Emoji}" FontSize="14" />
+                                                                                        </Button>
+                                                                                    </DataTemplate>
+                                                                                </ItemsControl.ItemTemplate>
+                                                                            </ItemsControl>
+                                                                            <Border Width="1" Background="#22FFFFFF" Margin="3,5" />
+                                                                            <Button Classes="ChatIcon" Click="OnChatReplyClicked"
+                                                                                    ToolTip.Tip="{Binding $parent[Window].DataContext.Loc.ChatReply}">
+                                                                                <PathIcon Data="M10,9V5L3,12L10,19V14.9C15,14.9 18.5,16.5 21,20C20,15 17,10 10,9Z"
+                                                                                          Width="14" Height="14" Foreground="#CBD5E1" />
+                                                                            </Button>
+                                                                            <Button Classes="ChatIcon" Click="OnPulseDeleteClicked" IsVisible="{Binding CanDelete}"
+                                                                                    ToolTip.Tip="{Binding $parent[Window].DataContext.Loc.BtnDelete}">
+                                                                                <PathIcon Data="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z"
+                                                                                          Width="13" Height="13" Foreground="#F87171" />
+                                                                            </Button>
+                                                                        </StackPanel>
+                                                                    </Border>
+                                                                </Grid>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </StackPanel>
+                                            </ScrollViewer>
+
+                                            <TextBlock Text="{Binding Loc.PulseEmpty}" IsVisible="{Binding Pulse.IsEmpty}" FontSize="12"
+                                                       Foreground="#64748B" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                            <TextBlock Text="{Binding Loc.CommunityLoading}" IsVisible="{Binding Pulse.IsFirstLoad}" FontSize="12"
+                                                       Foreground="#64748B" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                        </Panel>
+                                    </Border>
+
+                                    <!-- The composer: one rounded bar, the same shape language as the rest
+                                         of the app. Paste a picture with Ctrl+V, or pick one. -->
+                                    <StackPanel Grid.Row="1" Margin="0,10,0,0" Spacing="6">
+                                        <Border Classes="ChatComposer" Background="#0E1512" BorderBrush="#24FFFFFF"
+                                                BorderThickness="1" CornerRadius="24" Padding="7">
+                                            <StackPanel Spacing="7">
+                                                <!-- Replying to... -->
+                                                <Border IsVisible="{Binding Pulse.IsReplying}" Background="#0CFFFFFF" CornerRadius="14"
+                                                        Margin="4,0" ClipToBounds="True">
+                                                    <Grid ColumnDefinitions="3,*,Auto">
+                                                        <Border Grid.Column="0" Background="#00FF88" />
+                                                        <StackPanel Grid.Column="1" Margin="10,6" Spacing="1">
+                                                            <StackPanel Orientation="Horizontal" Spacing="5">
+                                                                <TextBlock Text="{Binding Loc.ChatReplyingTo}" FontSize="10.5" Foreground="#94A3B8" />
+                                                                <TextBlock Text="{Binding Pulse.ReplyingToAuthor}" FontSize="10.5" FontWeight="Bold" Foreground="#7CFFC4" />
+                                                            </StackPanel>
+                                                            <TextBlock Text="{Binding Pulse.ReplyingToSnippet}" FontSize="11" Foreground="#CBD5E1"
+                                                                       TextTrimming="CharacterEllipsis" />
+                                                        </StackPanel>
+                                                        <Button Grid.Column="2" Classes="ChatIcon" Click="OnChatCancelReplyClicked"
+                                                                Margin="0,0,6,0" VerticalAlignment="Center">
+                                                            <PathIcon Data="M 19,6.41 L 17.59,5 L 12,10.59 L 6.41,5 L 5,6.41 L 10.59,12 L 5,17.59 L 6.41,19 L 12,13.41 L 17.59,19 L 19,17.59 L 13.41,12 Z"
+                                                                      Width="9" Height="9" Foreground="#94A3B8" />
+                                                        </Button>
+                                                    </Grid>
+                                                </Border>
+
+                                                <!-- The picture about to be sent, already converted to WebP -->
+                                                <Panel IsVisible="{Binding Pulse.HasPendingImage}" HorizontalAlignment="Left" Margin="6,4,0,0">
+                                                    <Border CornerRadius="14" ClipToBounds="True" BorderBrush="#3300FF88" BorderThickness="1"
+                                                            Width="120" Height="80">
+                                                        <Image Source="{Binding Pulse.PendingPreview}" Stretch="UniformToFill" />
+                                                    </Border>
+                                                    <Button Classes="ChatRound" Click="OnPulseRemoveImageClicked" Width="24" Height="24" CornerRadius="12"
+                                                            Background="#F0101412" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-7,-7,0">
+                                                        <PathIcon Data="M 19,6.41 L 17.59,5 L 12,10.59 L 6.41,5 L 5,6.41 L 10.59,12 L 5,17.59 L 6.41,19 L 12,13.41 L 17.59,19 L 19,17.59 L 13.41,12 Z"
+                                                                  Width="8" Height="8" />
+                                                    </Button>
+                                                </Panel>
+
+                                                <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto" ColumnSpacing="6">
+                                                    <Button Grid.Column="0" Classes="ChatRound" Click="OnPulseAttachClicked" VerticalAlignment="Bottom"
+                                                            IsEnabled="{Binding !Pulse.IsAttaching}" ToolTip.Tip="{Binding Loc.BtnAttachImage}">
+                                                        <PathIcon Data="M21,19V5C21,3.9 20.1,3 19,3H5C3.9,3 3,3.9 3,5V19C3,20.1 3.9,21 5,21H19C20.1,21 21,20.1 21,19M8.5,13.5L11,16.5L14.5,12L19,18H5L8.5,13.5Z"
+                                                                  Width="16" Height="16" />
+                                                    </Button>
+
+                                                    <Button Grid.Column="1" Classes="ChatRound" VerticalAlignment="Bottom" ToolTip.Tip="Emoji">
+                                                        <PathIcon Data="M12,2C6.47,2 2,6.47 2,12C2,17.53 6.47,22 12,22C17.53,22 22,17.53 22,12C22,6.47 17.53,2 12,2M15.5,8C16.33,8 17,8.67 17,9.5C17,10.33 16.33,11 15.5,11C14.67,11 14,10.33 14,9.5C14,8.67 14.67,8 15.5,8M8.5,8C9.33,8 10,8.67 10,9.5C10,10.33 9.33,11 8.5,11C7.67,11 7,10.33 7,9.5C7,8.67 7.67,8 8.5,8M12,17.5C9.67,17.5 7.69,16.04 6.89,14H17.11C16.3,16.04 14.33,17.5 12,17.5Z"
+                                                                  Width="17" Height="17" />
+                                                        <Button.Flyout>
+                                                            <Flyout Placement="TopEdgeAlignedLeft">
+                                                                <Border Width="344" Padding="2">
+                                                                    <Border.Styles>
+                                                                        <Style Selector="Button.EmojiKey">
+                                                                            <Setter Property="Background" Value="Transparent" />
+                                                                            <Setter Property="BorderThickness" Value="0" />
+                                                                            <Setter Property="CornerRadius" Value="9" />
+                                                                            <Setter Property="Width" Value="40" />
+                                                                            <Setter Property="Height" Value="40" />
+                                                                            <Setter Property="Padding" Value="0" />
+                                                                            <Setter Property="HorizontalContentAlignment" Value="Center" />
+                                                                            <Setter Property="VerticalContentAlignment" Value="Center" />
+                                                                            <Setter Property="Cursor" Value="Hand" />
+                                                                        </Style>
+                                                                        <Style Selector="Button.EmojiKey:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+                                                                            <Setter Property="Background" Value="#22FFFFFF" />
+                                                                        </Style>
+                                                                    </Border.Styles>
+                                                                    <ItemsControl ItemsSource="{Binding Pulse.EmojiPalette}">
+                                                                        <ItemsControl.ItemsPanel>
+                                                                            <ItemsPanelTemplate>
+                                                                                <WrapPanel />
+                                                                            </ItemsPanelTemplate>
+                                                                        </ItemsControl.ItemsPanel>
+                                                                        <ItemsControl.ItemTemplate>
+                                                                            <DataTemplate x:DataType="vm:ChatReactionViewModel">
+                                                                                <Button Classes="EmojiKey" Click="OnChatEmojiClicked">
+                                                                                    <TextBlock Text="{Binding Emoji}" FontSize="20" />
+                                                                                </Button>
+                                                                            </DataTemplate>
+                                                                        </ItemsControl.ItemTemplate>
+                                                                    </ItemsControl>
+                                                                </Border>
+                                                            </Flyout>
+                                                        </Button.Flyout>
+                                                    </Button>
+
+                                                    <TextBox x:Name="PulseDraftBox" Grid.Column="2" Classes="ChatInput"
+                                                             Text="{Binding Pulse.Draft, Mode=TwoWay}"
+                                                             PlaceholderText="{Binding Loc.PulsePlaceholder}" KeyDown="OnPulseDraftKeyDown"
+                                                             AcceptsReturn="True" TextWrapping="Wrap" MaxHeight="110" MaxLength="600"
+                                                             VerticalAlignment="Center" />
+
+                                                    <Panel Grid.Column="3" VerticalAlignment="Center" IsVisible="{Binding Pulse.ShowCharCount}">
+                                                        <TextBlock Text="{Binding Pulse.CharCountText}" IsVisible="{Binding !Pulse.IsOverLimit}"
+                                                                   FontSize="10" Foreground="#64748B" />
+                                                        <TextBlock Text="{Binding Pulse.CharCountText}" IsVisible="{Binding Pulse.IsOverLimit}"
+                                                                   FontSize="10" FontWeight="Bold" Foreground="#EF4444" />
+                                                    </Panel>
+
+                                                    <Button Grid.Column="4" Classes="ChatRound ChatSend" Click="OnPulseSendClicked"
+                                                            IsEnabled="{Binding Pulse.CanSend}" VerticalAlignment="Bottom"
+                                                            ToolTip.Tip="{Binding Loc.BtnSend}">
+                                                        <PathIcon Data="M2,21L23,12L2,3V10L17,12L2,14V21Z" Width="15" Height="15" Margin="2,0,0,0" />
+                                                    </Button>
+                                                </Grid>
+                                            </StackPanel>
+                                        </Border>
+
+                                        <Grid ColumnDefinitions="*,Auto" Margin="16,0">
+                                            <TextBlock Grid.Column="0" Text="{Binding Loc.PulseRules}" FontSize="10" Foreground="#64748B"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Grid.Column="1" Text="{Binding Pulse.Status}" IsVisible="{Binding Pulse.HasStatus}"
+                                                       FontSize="10.5" Foreground="#FCA5A5" TextTrimming="CharacterEllipsis" MaxWidth="460" />
+                                        </Grid>
+                                    </StackPanel>
+                                </Grid>
 
                                 <Panel Grid.Row="2">
 
@@ -1589,10 +2080,16 @@
 
                                     <!-- The grid -->
                                     <ScrollViewer x:Name="CommunityScrollViewer"
-                                                  IsVisible="{Binding Community.IsNamed}"
                                                   HorizontalScrollBarVisibility="Disabled"
                                                   VerticalScrollBarVisibility="Auto"
+                                                  ScrollChanged="OnCommunityScrolled"
                                                   ClipToBounds="False">
+                                        <ScrollViewer.IsVisible>
+                                            <MultiBinding Converter="{x:Static BoolConverters.And}">
+                                                <Binding Path="Community.IsNamed" />
+                                                <Binding Path="IsCommunityGamesOpen" />
+                                            </MultiBinding>
+                                        </ScrollViewer.IsVisible>
                                         <StackPanel Spacing="12">
                                             <TextBlock Text="{Binding Community.StatusMessage}" IsVisible="{Binding Community.HasStatusMessage}"
                                                        FontSize="11.5" Foreground="#FCA5A5" TextWrapping="Wrap" HorizontalAlignment="Center" />
@@ -1672,8 +2169,72 @@
                                                 </ItemsControl.ItemTemplate>
                                             </ItemsControl>
 
+                                            <!-- The next page is on its way. Sits under the grid so the
+                                                 rows already on screen stay exactly where they are. -->
+                                            <Border IsVisible="{Binding Community.IsLoadingMore}" Margin="0,4,0,0"
+                                                    HorizontalAlignment="Center">
+                                                <StackPanel Orientation="Horizontal" Spacing="10">
+                                                    <Ellipse Width="14" Height="14" StrokeThickness="2"
+                                                             StrokeDashArray="2.6,1.6" StrokeLineCap="Round"
+                                                             Stroke="{Binding MotifAccentBrush}"
+                                                             VerticalAlignment="Center"
+                                                             RenderTransformOrigin="50%,50%">
+                                                        <Ellipse.Styles>
+                                                            <Style Selector="Ellipse">
+                                                                <Style.Animations>
+                                                                    <Animation Duration="0:0:1.1" IterationCount="Infinite">
+                                                                        <KeyFrame Cue="0%">
+                                                                            <Setter Property="RotateTransform.Angle" Value="0" />
+                                                                        </KeyFrame>
+                                                                        <KeyFrame Cue="100%">
+                                                                            <Setter Property="RotateTransform.Angle" Value="360" />
+                                                                        </KeyFrame>
+                                                                    </Animation>
+                                                                </Style.Animations>
+                                                            </Style>
+                                                        </Ellipse.Styles>
+                                                    </Ellipse>
+                                                    <TextBlock Text="{Binding Loc.CommunityLoadingMore}" FontSize="11"
+                                                               Foreground="#7C8595" VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </Border>
+
+                                            <!-- Still fetching. An empty grid and a slow one look the
+                                                 same otherwise, which is what read as a freeze. -->
+                                            <Border IsVisible="{Binding Community.IsFirstLoad}" Margin="0,60,0,0"
+                                                    HorizontalAlignment="Center">
+                                                <StackPanel Spacing="14" HorizontalAlignment="Center">
+                                                    <Border Width="34" Height="34" CornerRadius="17"
+                                                            Background="#12FFFFFF" BorderBrush="#1FFFFFFF" BorderThickness="1"
+                                                            HorizontalAlignment="Center">
+                                                        <Ellipse Width="19" Height="19" StrokeThickness="2.4"
+                                                                 StrokeDashArray="2.6,1.6" StrokeLineCap="Round"
+                                                                 Stroke="{Binding MotifAccentBrush}"
+                                                                 HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                                 RenderTransformOrigin="50%,50%">
+                                                            <Ellipse.Styles>
+                                                                <Style Selector="Ellipse">
+                                                                    <Style.Animations>
+                                                                        <Animation Duration="0:0:1.1" IterationCount="Infinite">
+                                                                            <KeyFrame Cue="0%">
+                                                                                <Setter Property="RotateTransform.Angle" Value="0" />
+                                                                            </KeyFrame>
+                                                                            <KeyFrame Cue="100%">
+                                                                                <Setter Property="RotateTransform.Angle" Value="360" />
+                                                                            </KeyFrame>
+                                                                        </Animation>
+                                                                    </Style.Animations>
+                                                                </Style>
+                                                            </Ellipse.Styles>
+                                                        </Ellipse>
+                                                    </Border>
+                                                    <TextBlock Text="{Binding Loc.CommunityLoading}" FontSize="11.5"
+                                                               Foreground="#7C8595" HorizontalAlignment="Center" />
+                                                </StackPanel>
+                                            </Border>
+
                                             <!-- Nobody has posted about anything matching this filter -->
-                                            <Border IsVisible="{Binding Community.IsEmpty}" Margin="0,40,0,0"
+                                            <Border IsVisible="{Binding Community.ShowNothingFound}" Margin="0,40,0,0"
                                                     Background="#08FFFFFF" BorderBrush="#18FFFFFF" BorderThickness="1"
                                                     CornerRadius="20" Padding="30" MaxWidth="480" HorizontalAlignment="Center">
                                                 <StackPanel Spacing="8">
@@ -1869,12 +2430,16 @@
 
                                     <Border Grid.Column="1" CornerRadius="13" Padding="3" Background="#0C1014"
                                             BorderBrush="#20FFFFFF" BorderThickness="1" HorizontalAlignment="Stretch">
-                                        <UniformGrid Columns="3">
+                                        <!-- Two, not three. There is one OptiScaler build now, and
+                                             the choice here only decides which DLL name it takes:
+                                             dxgi.dll for DirectX 12, winmm.dll for Vulkan. -->
+                                        <UniformGrid Columns="2">
                                             <Panel>
                                                 <Button Classes="SegmentedTab" Classes.Active="{Binding IsOptiDx12}" Click="OnSetOptiDx12"
                                                         IsEnabled="{Binding IsManageReady}" Padding="6,6" FontSize="11.5"
                                                         Content="DirectX 12" Cursor="Hand"
-                                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                                        ToolTip.Tip="Hooks dxgi.dll first" />
                                                 <Border Classes="ActiveRouteDot" IsVisible="{Binding IsOptiDx12Installed}" />
                                             </Panel>
                                             <Panel>
@@ -1884,14 +2449,6 @@
                                                         HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
                                                         ToolTip.Tip="Hooks winmm.dll first - a Vulkan title never loads dxgi.dll" />
                                                 <Border Classes="ActiveRouteDot" IsVisible="{Binding IsOptiVulkanInstalled}" />
-                                            </Panel>
-                                            <Panel>
-                                                <Button Classes="SegmentedTab" Classes.Active="{Binding IsOptiNeural}" Click="OnSetOptiNeural"
-                                                        IsEnabled="{Binding IsManageReady}" Padding="6,6" FontSize="11.5"
-                                                        Content="Upstream" Cursor="Hand"
-                                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
-                                                        ToolTip.Tip="neural-upstream - a different OptiScaler build, hooked exactly like DirectX 12" />
-                                                <Border Classes="ActiveRouteDot" IsVisible="{Binding IsOptiNeuralInstalled}" />
                                             </Panel>
                                         </UniformGrid>
                                     </Border>
@@ -1942,14 +2499,21 @@
                             </Grid>
                         </Border>
 
-                        <!-- Neural upstream: one extra add-on that travels with the DX12,
-                             DX11, DX9 and AMD installs. It sits outside the route picker
-                             because AMD mode hides that card entirely. -->
+                        <!-- Install options that ride along with a route, as three aligned rows.
+                             Neural upstream travels with the DX12, DX11, DX9 and AMD installs;
+                             the two RenoDX options exist only where RenoDX itself is installed
+                             (the 64-bit DX12, DX11 and DX9 routes). What each does is on its ON
+                             button's tooltip, so the card stays tidy. It sits outside the route
+                             picker because AMD mode hides that card entirely. -->
                         <Border Classes="RouteReveal" Classes.Shown="{Binding IsNeuralAddonVisible}" IsVisible="{Binding IsNeuralAddonVisible}"
                                 Background="#0CFFFFFF" BorderBrush="#1AFFFFFF" BorderThickness="1"
-                                CornerRadius="16" Padding="16,13">
-                            <StackPanel Spacing="10">
-                                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                                CornerRadius="16" Padding="16,12">
+                            <StackPanel Spacing="9" Grid.IsSharedSizeScope="True">
+                                <Grid ColumnSpacing="12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" SharedSizeGroup="InstallOptionLabel" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
                                         <TextBlock Text="NEURAL UPSTREAM" FontSize="9.5" FontWeight="Bold"
                                                    Foreground="#7C8595" LetterSpacing="0.8" VerticalAlignment="Center" />
@@ -1979,8 +2543,62 @@
                                     </Border>
                                 </Grid>
 
-                                <TextBlock Text="Adds nvngx.dll.addon64 next to the game on top of the route above. Leave it off unless you know the game wants it."
-                                           FontSize="11" Foreground="#94A3B8" TextWrapping="Wrap" LineHeight="16" />
+                                <!-- The two RenoDX options: only where RenoDX itself is installed -->
+                                <Border Height="1" Background="#12FFFFFF" IsVisible="{Binding IsRenoDxOptionsVisible}" />
+
+                                <Grid ColumnSpacing="12" IsVisible="{Binding IsRenoDxOptionsVisible}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" SharedSizeGroup="InstallOptionLabel" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="RENODX-MFGUNLOCK" FontSize="9.5" FontWeight="Bold"
+                                               Foreground="#7C8595" LetterSpacing="0.8" VerticalAlignment="Center" />
+
+                                    <Border Grid.Column="1" CornerRadius="13" Padding="3" Background="#0C1014"
+                                            BorderBrush="#20FFFFFF" BorderThickness="1" HorizontalAlignment="Stretch">
+                                        <UniformGrid Columns="2">
+                                            <Panel>
+                                                <Button Classes="SegmentedTab" Classes.Active="{Binding IsMfgUnlockOff}" Click="OnSetMfgUnlockOff"
+                                                        IsEnabled="{Binding IsManageReady}" Padding="8,6" Content="OFF" Cursor="Hand"
+                                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                                            </Panel>
+                                            <Panel>
+                                                <Button Classes="SegmentedTab" Classes.Active="{Binding IsMfgUnlockOn}" Click="OnSetMfgUnlockOn"
+                                                        IsEnabled="{Binding IsManageReady}" Padding="8,6" Content="ON" Cursor="Hand"
+                                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                                        ToolTip.Tip="Sends renodx-mfgunlock.addon64 next to the game, beside RenoDX" />
+                                                <Border Classes="ActiveRouteDot" IsVisible="{Binding IsMfgUnlockInstalled}" />
+                                            </Panel>
+                                        </UniformGrid>
+                                    </Border>
+                                </Grid>
+
+                                <Grid ColumnSpacing="12" IsVisible="{Binding IsRenoDxOptionsVisible}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" SharedSizeGroup="InstallOptionLabel" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="MULTIPASS" FontSize="9.5" FontWeight="Bold"
+                                               Foreground="#7C8595" LetterSpacing="0.8" VerticalAlignment="Center" />
+
+                                    <Border Grid.Column="1" CornerRadius="13" Padding="3" Background="#0C1014"
+                                            BorderBrush="#20FFFFFF" BorderThickness="1" HorizontalAlignment="Stretch">
+                                        <UniformGrid Columns="2">
+                                            <Panel>
+                                                <Button Classes="SegmentedTab" Classes.Active="{Binding IsMultipassOff}" Click="OnSetMultipassOff"
+                                                        IsEnabled="{Binding IsManageReady}" Padding="8,6" Content="OFF" Cursor="Hand"
+                                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                                            </Panel>
+                                            <Panel>
+                                                <Button Classes="SegmentedTab" Classes.Active="{Binding IsMultipassOn}" Click="OnSetMultipassOn"
+                                                        IsEnabled="{Binding IsManageReady}" Padding="8,6" Content="ON" Cursor="Hand"
+                                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                                        ToolTip.Tip="Installs renodx-dlss5.addon64 in place of renodx-dlss.addon64" />
+                                                <Border Classes="ActiveRouteDot" IsVisible="{Binding IsMultipassInstalled}" />
+                                            </Panel>
+                                        </UniformGrid>
+                                    </Border>
+                                </Grid>
                             </StackPanel>
                         </Border>
 
@@ -1989,22 +2607,35 @@
                         <Border Classes="RouteReveal" Classes.Shown="{Binding IsOverlayRouteSupported}" IsVisible="{Binding IsOverlayRouteSupported}"
                                 Background="#0CFFFFFF" BorderBrush="#1AFFFFFF" BorderThickness="1"
                                 CornerRadius="16" Padding="16,13">
-                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
-                                <TextBlock Grid.Column="0" Text="{Binding Loc.OverlaySection}" FontSize="9.5" FontWeight="Bold"
-                                           Foreground="#7C8595" LetterSpacing="0.8" VerticalAlignment="Center" />
+                            <StackPanel Spacing="9">
+                                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                                    <TextBlock Grid.Column="0" Text="{Binding Loc.OverlaySection}" FontSize="9.5" FontWeight="Bold"
+                                               Foreground="#7C8595" LetterSpacing="0.8" VerticalAlignment="Center" />
 
-                                <Border Grid.Column="1" CornerRadius="13" Padding="3" Background="#0C1014"
-                                        BorderBrush="#20FFFFFF" BorderThickness="1" HorizontalAlignment="Stretch">
-                                    <UniformGrid Columns="2">
-                                        <Button Classes="SegmentedTab" Classes.Active="{Binding !IsOverlayEnabled}" Click="OnSetOverlayOff"
-                                                IsEnabled="{Binding IsManageReady}" Padding="8,6" Content="OFF" Cursor="Hand"
-                                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
-                                        <Button Classes="SegmentedTab" Classes.Active="{Binding IsOverlayEnabled}" Click="OnSetOverlayOn"
-                                                IsEnabled="{Binding IsManageReady}" Padding="8,6" Content="ON" Cursor="Hand"
-                                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
-                                    </UniformGrid>
-                                </Border>
-                            </Grid>
+                                    <Border Grid.Column="1" CornerRadius="13" Padding="3" Background="#0C1014"
+                                            BorderBrush="#20FFFFFF" BorderThickness="1" HorizontalAlignment="Stretch">
+                                        <UniformGrid Columns="2">
+                                            <Button Classes="SegmentedTab" Classes.Active="{Binding !IsOverlayEnabled}" Click="OnSetOverlayOff"
+                                                    IsEnabled="{Binding IsManageReady}" Padding="8,6" Content="OFF" Cursor="Hand"
+                                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                                            <Button Classes="SegmentedTab" Classes.Active="{Binding IsOverlayEnabled}" Click="OnSetOverlayOn"
+                                                    IsEnabled="{Binding IsManageReady}" Padding="8,6" Content="ON" Cursor="Hand"
+                                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                                        </UniformGrid>
+                                    </Border>
+                                </Grid>
+
+                                <!-- The key this install will actually write. Without it the user
+                                     has to go looking in Settings for how to open the thing they
+                                     just switched on. -->
+                                <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding IsOverlayEnabled}">
+                                    <TextBlock Text="{Binding Loc.OverlayHotkey}" FontSize="10.5" Foreground="#7C8595" VerticalAlignment="Center" />
+                                    <Border Background="#12FFFFFF" BorderBrush="#25FFFFFF" BorderThickness="1"
+                                            CornerRadius="7" Padding="9,2" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding SelectedOverlayHotkey}" FontSize="10.5" FontWeight="Bold" Foreground="#E2E8F0" />
+                                    </Border>
+                                </StackPanel>
+                            </StackPanel>
                         </Border>
 
                         <!-- Live progress: proves the app is working, never frozen -->
@@ -2116,6 +2747,60 @@
                     </Border>
                 </Border>
             </Canvas>
+
+            <!-- ============================================================ -->
+            <!-- CHAT: SOMEONE REPLIED TO YOU                                 -->
+            <!-- Only replies to your own messages, and only inside the app.  -->
+            <!-- Click it to open the chat; it also fades out by itself.      -->
+            <!-- ============================================================ -->
+            <Border IsVisible="{Binding Pulse.HasReplyToast}" ZIndex="9700"
+                    HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,26,26"
+                    Background="#F2101613" BorderBrush="#5500FF88" BorderThickness="1" CornerRadius="16"
+                    Padding="13,11" MaxWidth="380" Cursor="Hand" PointerPressed="OnReplyToastPressed">
+                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="11">
+                    <Border Grid.Column="0" Width="32" Height="32" CornerRadius="16" Background="#2200FF88"
+                            VerticalAlignment="Center">
+                        <PathIcon Data="M10,9V5L3,12L10,19V14.9C15,14.9 18.5,16.5 21,20C20,15 17,10 10,9Z"
+                                  Width="14" Height="14" Foreground="#7CFFC4" />
+                    </Border>
+                    <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+                        <TextBlock Text="NEW REPLY" FontSize="9.5" FontWeight="Bold" Foreground="#7CFFC4" LetterSpacing="0.8" />
+                        <TextBlock Text="{Binding Pulse.ReplyToastText}" FontSize="12" Foreground="#E2E8F0"
+                                   TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                    <Button Grid.Column="2" Classes="RouteChip" Click="OnReplyToastCloseClicked" Cursor="Hand"
+                            Padding="5" VerticalAlignment="Top">
+                        <PathIcon Data="M 19,6.41 L 17.59,5 L 12,10.59 L 6.41,5 L 5,6.41 L 10.59,12 L 5,17.59 L 6.41,19 L 12,13.41 L 17.59,19 L 19,17.59 L 13.41,12 Z"
+                                  Width="8" Height="8" Foreground="#94A3B8" />
+                    </Button>
+                </Grid>
+            </Border>
+
+            <!-- ============================================================ -->
+            <!-- CHAT: A PICTURE AT FULL SIZE                                 -->
+            <!-- Click outside it, CLOSE or Esc to go back; SAVE asks where.  -->
+            <!-- ============================================================ -->
+            <Panel IsVisible="{Binding Pulse.IsViewerOpen}" ZIndex="9800">
+                <Border Background="#E6050807" PointerPressed="OnChatViewerBackdropPressed" />
+
+                <Grid RowDefinitions="*,Auto" Margin="48,40,48,28">
+                    <Image Grid.Row="0" Source="{Binding Pulse.ViewerImage}" Stretch="Uniform"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           RenderOptions.BitmapInterpolationMode="HighQuality" />
+
+                    <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="10" HorizontalAlignment="Center" Margin="0,18,0,0">
+                        <Button Classes="ApplePrimaryBtn" Click="OnChatViewerSaveClicked" Cursor="Hand" Padding="18,9">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <PathIcon Data="M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z" Width="13" Height="13" />
+                                <TextBlock Text="{Binding Loc.ChatSaveImage}" FontSize="11.5" FontWeight="Bold" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                        <Button Classes="EmptyActionBtn" Click="OnChatViewerCloseClicked" Cursor="Hand" Padding="18,9">
+                            <TextBlock Text="{Binding Loc.ChatClose}" FontSize="11.5" FontWeight="Bold" Foreground="#CBD5E1" />
+                        </Button>
+                    </StackPanel>
+                </Grid>
+            </Panel>
 
             <!-- ============================================================ -->
             <!-- COMMUNITY: ONE GAME'S REPORTS                                -->
